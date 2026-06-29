@@ -18,14 +18,13 @@ module.exports = {
                 model: 'limmygene',
                 messages: [{ role: 'user', content: userInput }],
                 stream: false,
-                // Disable Open WebUI features that slow down API responses
                 features: {
                     web_search: false,
                     image_generation: false,
                     code_interpreter: false,
                 },
             }, {
-                timeout: 120_000, // 2 minute timeout for thinking model
+                timeout: 120_000, 
             });
 
             let content = response.choices?.[0]?.message?.content;
@@ -35,10 +34,10 @@ module.exports = {
                 return;
             }
 
-            // Strip <think>...</think> blocks that qwen3.5's thinking mode produces
+
             content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 
-            // Strip citation markers like [1], [2], etc.
+
             content = content.replace(/\[\d+\]/g, '').trim();
 
             if (!content) {
@@ -55,9 +54,7 @@ module.exports = {
 
         } catch (error) {
             console.error('OpenWebUI Error:', error);
-            // Wrap editReply in its own try/catch — if the interaction expired
-            // while the model was thinking, this call also throws, and without
-            // catching it the error is swallowed and Discord shows "did not respond"
+
             try {
                 await interaction.editReply(`Error: ${error.message ?? 'Something went wrong.'}`);
             } catch (replyError) {
