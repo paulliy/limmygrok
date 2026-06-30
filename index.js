@@ -1,6 +1,6 @@
 // Require the necessary discord.js classes
 const { Client, Events, GatewayIntentBits, Collection, MessageFlags} = require('discord.js');
-const { token, APIkey } = require('./config.json');
+const { token, APIkey, API_BASE_URL } = require('./config.json');
 const fs = require('node:fs');
 const path = require('node:path');
 // Create a new client instance
@@ -23,7 +23,7 @@ client.commands = new Collection();
 
 const openWebUI = new OpenAI({
   apiKey: APIkey,
-  baseURL: 'https://chat.gatewaymc.com/api'
+  baseURL: API_BASE_URL
 });
 client.openWebUI = openWebUI;
 

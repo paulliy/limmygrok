@@ -1,4 +1,5 @@
 const { SlashCommandBuilder } = require('discord.js');
+const {MODEL_NAME} = require('../../config.json');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -15,7 +16,7 @@ module.exports = {
 
         try {
             const stream = await openWebUI.chat.completions.create({
-                model: 'limmygene',
+                model: MODEL_NAME,
                 messages: [
                     { role: 'user', content: userInput }
                 ],

@@ -1,4 +1,5 @@
 const { Events, Collection } = require('discord.js');
+const {MODEL_NAME} = require('../config.json');
 
 module.exports = {
     name: Events.MessageCreate,
@@ -118,7 +119,7 @@ module.exports = {
 
             try { 
                 const apiPayload = {
-                    model: 'limmygene',
+                    model: MODEL_NAME,
                     messages: [
                         { role: 'user', content: messageContent }
                     ],
