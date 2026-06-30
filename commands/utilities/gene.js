@@ -14,52 +14,77 @@ module.exports = {
         const openWebUI = interaction.client.openWebUI;
 
         try {
-            const response = await openWebUI.chat.completions.create({
+            const stream = await openWebUI.chat.completions.create({
                 model: 'limmygene',
-                messages: [{ role: 'user', content: userInput }],
-                stream: false,
-                features: {
-                    web_search: false,
-                    image_generation: false,
-                    code_interpreter: false,
-                },
+                messages: [
+                    { role: 'user', content: userInput }
+                ],
+                stream: true,
+                // Removed non-standard 'features' object to prevent OpenWebUI from dropping the request
             }, {
-                timeout: 120_000, 
+                timeout: 120_000,
             });
 
-            let content = response.choices?.[0]?.message?.content;
+            let content = '';
+            let lastDisplayedContent = '';
+            let isEditing = false;
+            let isFinished = false;
 
-            if (!content) {
-                await interaction.editReply(' No response was generated.');
-                return;
+            // Decoupled editing interval prevents Discord rate limits from blocking the stream
+            const editInterval = setInterval(async () => {
+                if (isFinished || isEditing) return;
+                
+                const displayContent = content
+                    .replace(/<think>(?:[\s\S]*?<\/think>|[\s\S]*$)/gi, '')
+                    .replace(/\[\d+\]/g, '')
+                    .trim();
+
+                const safeContent = displayContent || '*Thinking...*';
+                const chunkToSend = safeContent.slice(0, 2000);
+
+                if (chunkToSend !== lastDisplayedContent) {
+                    isEditing = true;
+                    try {
+                        await interaction.editReply(chunkToSend);
+                        lastDisplayedContent = chunkToSend;
+                    } catch (error) {
+                        console.error('Edit error:', error);
+                    } finally {
+                        isEditing = false;
+                    }
+                }
+            }, 1500);
+
+            // Read the stream as fast as it arrives without awaiting Discord
+            for await (const chunk of stream) {
+                const deltaContent = chunk.choices?.[0]?.delta?.content;
+                if (deltaContent) {
+                    content += deltaContent;
+                }
             }
 
+            isFinished = true;
+            clearInterval(editInterval);
 
-            content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+            const finalContent = content
+                .replace(/<think>[\s\S]*?<\/think>/gi, '')
+                .replace(/\[\d+\]/g, '')
+                .trim();
 
-
-            content = content.replace(/\[\d+\]/g, '').trim();
-
-            if (!content) {
+            if (!finalContent) {
                 await interaction.editReply('The model only returned thinking content with no final response.');
                 return;
             }
 
-            // Discord has a 2000 character limit per message
-            if (content.length > 2000) {
-                await interaction.editReply(content.slice(0, 1997) + '...');
+            if (finalContent.length > 2000) {
+                await interaction.editReply(finalContent.slice(0, 1997) + '...');
             } else {
-                await interaction.editReply(content);
+                await interaction.editReply(finalContent);
             }
 
         } catch (error) {
             console.error('OpenWebUI Error:', error);
-
-            try {
-                await interaction.editReply(`Error: ${error.message ?? 'Something went wrong.'}`);
-            } catch (replyError) {
-                console.error('Failed to send error reply (interaction may have expired):', replyError);
-            }
+            await interaction.editReply(`Error: ${error.message ?? 'Something went wrong.'}`).catch(() => {});
         }
     },
 };

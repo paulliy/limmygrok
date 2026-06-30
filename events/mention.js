@@ -1,98 +1,165 @@
 const { Events, Collection } = require('discord.js');
 
 module.exports = {
-	name: Events.MessageCreate,
-	once: false,
-	async execute(message) {
+    name: Events.MessageCreate,
+    once: false,
+    async execute(message) {
+        if (message.author.bot) return;
 
-		if (message.author.bot) return;
+        if (message.mentions.has(message.client.user)) {
+            const { cooldowns } = message.client;
+            const commandName = 'mention'; 
+            const defaultCooldownDuration = 5; 
 
+            if (!cooldowns.has(commandName)) {
+                cooldowns.set(commandName, new Collection());
+            }
 
-		if (message.mentions.has(message.client.user)) {
-			const { cooldowns } = message.client;
-			const commandName = 'mention'; // Use a fixed name for the mention event
-			const defaultCooldownDuration = 5; // 5 seconds
+            const now = Date.now();
+            const timestamps = cooldowns.get(commandName);
+            const cooldownAmount = defaultCooldownDuration * 1000;
 
-			if (!cooldowns.has(commandName)) {
-				cooldowns.set(commandName, new Collection());
-			}
+            if (timestamps.has(message.author.id)) {
+                const expirationTime = timestamps.get(message.author.id) + cooldownAmount;
+                if (now < expirationTime) return;
+            }
+            
+            const openWebUI = message.client.openWebUI;
 
-			const now = Date.now();
-			const timestamps = cooldowns.get(commandName);
-			const cooldownAmount = defaultCooldownDuration * 1000;
+            await message.channel.sendTyping();
+            const typingInterval = setInterval(() => message.channel.sendTyping(), 8_000);
 
-			if (timestamps.has(message.author.id)) {
-				const expirationTime = timestamps.get(message.author.id) + cooldownAmount;
+            timestamps.set(message.author.id, now);
+            setTimeout(() => timestamps.delete(message.author.id), cooldownAmount);
 
-				if (now < expirationTime) {
-					const expiredTimestamp = Math.round(expirationTime / 1000);
-					// Silently ignore to prevent spam, or you could reply with a cooldown message.
-					return;
-				}
-			}
-			const openWebUI = message.client.openWebUI;
+            let messageContent = message.content;
+            const userMentionRegex = new RegExp(`<@!?${message.client.user.id}>`, 'g');
+            messageContent = messageContent.replace(userMentionRegex, '');
 
+            message.mentions.roles.forEach(role => {
+                if (role.name === message.client.user.username) {
+                    messageContent = messageContent.replace(new RegExp(`<@&${role.id}>`, 'g'), '');
+                }
+            });
 
-			await message.channel.sendTyping();
-			const typingInterval = setInterval(
-				() => message.channel.sendTyping(),
-				8_000,
-			);
+            messageContent = messageContent.trim();
 
+            if (!messageContent) {
+                message.reply('Ask me smth chud...');
+                clearInterval(typingInterval); 
+                return;
+            }
 
-			const botMentionRegex = new RegExp(
-				`<@!?${message.client.user.id}>`, 'g',
-			);
-			const messageContent = message.content.replace(botMentionRegex, '').trim();
+            let replyMessage = await message.reply('*Thinking...*'); 
 
-			timestamps.set(message.author.id, now);
-			setTimeout(() => timestamps.delete(message.author.id), cooldownAmount);
+            let content = '';
+            let lastDisplayedContent = '*Thinking...*'; 
+            let isEditing = false;
+            let isFinished = false;
 
-			if (!messageContent) {
-				message.reply('You mentioned me, but did not provide any input!');
-				return;
-			}
+            const loadingPhrases = [
+                'Thinking', 'Pondering', 'Questing', 'Holding site', 
+                'Playing Valorant', 'Winning', 'Cooking', 'Strategizing',
+                'Turtletiming', 'Coding', 'Synthizing', 'Baldliking',
+                'Chudding', 'Meowling', 'Climbing rocks', 'Whiffing hard',
+                'Bawberrying', 'Bankheading', 'Geneing', 'Limmying', 'Praying',
+                'Five Stacking A', 'Dying mid', 'Drinking OJ', 'Eating Goldfish',
+                'Saving the World', 'Plain Janing','Ai-ing','Listening to AJR',
+                'Getting a new permit','Watching the sunset','Reading a book','Writing a poem',
+                'Exploring the universe','Building a sandcastle','Juggling','Solving a mystery',
+                'Painting a masterpiece','Dancing','Singing','Tinkering'
+            ];
+            let phraseIndex = Math.floor(Math.random() * loadingPhrases.length);
+            let dotCount = 1; 
 
-			const userInput = messageContent;
+            console.log(`\n[DEBUG] --- STREAM STARTED ---`);
 
-			try { // eslint-disable-line no-useless-catch
-				const response = await openWebUI.chat.completions.create({
-						model: 'limmygene',
-						messages: [{ role: 'user', content: userInput }],
-						stream: false,
-						features: {
-							web_search: false,
-							image_generation: false,
-							code_interpreter: false,
-						},
-					},
-					{ timeout: 120_000 }, 
-				);
+            // 1. Start the animation interval IMMEDIATELY, before waiting on the API
+            const editInterval = setInterval(async () => {
+                if (isFinished) return;
 
-				let content = response.choices?.[0]?.message?.content;
+                const displayContent = content
+                    .replace(/<think>(?:[\s\S]*?<\/think>|[\s\S]*$)/gi, '')
+                    .replace(/\[\d+\]/g, '')
+                    .trim();
 
-				if (!content) {
-					await message.reply('No response was generated.');
-					return;
-				}
+                let safeContent;
+                
+                if (displayContent) {
+                    safeContent = displayContent;
+                } else {
+                    safeContent = `*${loadingPhrases[phraseIndex]}${'.'.repeat(dotCount)}*`;
+                    
+                    dotCount++;
+                    if (dotCount > 3) {
+                        dotCount = 1; 
+                        phraseIndex = (phraseIndex + 1) % loadingPhrases.length; 
+                    }
+                }
 
+                const chunkToSend = safeContent.slice(0, 2000);
 
-				content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-				content = content.replace(/\[\d+\]/g, '').trim();
+                if (isEditing || chunkToSend === lastDisplayedContent) return;
 
-				if (!content) {
-					await message.reply('The model only returned thinking content with no final response.');
-					return;
-				}
+                isEditing = true;
+                try {
+                    await replyMessage.edit(chunkToSend);
+                    lastDisplayedContent = chunkToSend;
+                } catch (error) {
+                    console.error('\n[DEBUG Edit Error]:', error.message);
+                } finally {
+                    isEditing = false;
+                }
+            }, 1500);
 
+            try { 
+                const apiPayload = {
+                    model: 'limmygene',
+                    messages: [
+                        { role: 'user', content: messageContent }
+                    ],
+                    stream: true,
+                };
 
-				await message.reply(content.length > 2000 ? content.slice(0, 1997) + '...' : content);
-			} catch (error) {
-				console.error('OpenWebUI Error:', error);
-				await message.reply(`Error: ${error.message ?? 'Something went wrong.'}`);
-			} finally {
-				clearInterval(typingInterval);
-			}
-		}
-	},
+                // 2. Now await the API (the animation is already running in the background)
+                const stream = await openWebUI.chat.completions.create(apiPayload);
+
+                for await (const chunk of stream) {
+                    const deltaContent = chunk.choices?.[0]?.delta?.content;
+                    if (deltaContent) {
+                        content += deltaContent;
+                        process.stdout.write(deltaContent);
+                    }
+                }
+                
+                isFinished = true;
+                console.log(`\n[DEBUG] --- STREAM FINISHED ---`);
+
+                const finalContent = content
+                    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+                    .replace(/\[\d+\]/g, '')
+                    .trim();
+                
+                const truncatedFinalContent = finalContent.length > 2000 
+                    ? finalContent.slice(0, 1997) + '...' 
+                    : finalContent;
+
+                if (!finalContent) {
+                    await replyMessage.edit('The model only returned thinking content with no final response.');
+                    return;
+                }
+
+                await replyMessage.edit(truncatedFinalContent);
+
+            } catch (error) {
+                console.error('OpenWebUI Error:', error);
+                await replyMessage.edit(`Error: ${error.message ?? 'Something went wrong.'}`).catch(() => {});
+            } finally {
+                // Ensure intervals are always cleared, even if the API throws an error
+                isFinished = true; 
+                clearInterval(editInterval);
+                clearInterval(typingInterval);
+            }
+        }
+    },
 };
