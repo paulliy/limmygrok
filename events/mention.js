@@ -50,10 +50,10 @@ module.exports = {
                 return;
             }
 
-            let replyMessage = await message.reply('*Thinking...*'); 
+            let replyMessage = await message.reply('*Thinking.*'); 
 
             let content = '';
-            let lastDisplayedContent = '*Thinking...*'; 
+            let lastDisplayedContent = '*Thinking.*'; 
             let isEditing = false;
             let isFinished = false;
 
@@ -63,21 +63,24 @@ module.exports = {
                 'Turtletiming', 'Coding', 'Synthizing', 'Baldliking',
                 'Chudding', 'Meowling', 'Climbing rocks', 'Whiffing hard',
                 'Bawberrying', 'Bankheading', 'Geneing', 'Limmying', 'Praying',
-                'Five Stacking A', 'Dying mid', 'Drinking OJ', 'Eating Goldfish',
+                'Five Stacking A', 'Dying mid', 'Eating Goldfish',
                 'Saving the World', 'Plain Janing','Ai-ing','Listening to AJR',
-                'Getting a new permit','Watching the sunset','Reading a book','Writing a poem',
-                'Exploring the universe','Building a sandcastle','Juggling','Solving a mystery',
-                'Painting a masterpiece','Dancing','Singing','Tinkering'
+                'Getting a new permit','Watching the sunset','Reading','Writing',
+                'Exploring','Juggling','Solving','Aiming','Cleaning',
+                'Painting','Dancing','Singing','Tinkering','Locking in',
+                'Stargazing','Learning','Building','Sleeping','Flicking',
+                'Waiting for tim','Scrolling','Watching cote','Holding mid',
+                'Whiffing again','Full buying','Picking up the bomb','Defusing','Planting','Rotating',
+                'Joining VC','Wordle streaking','Playing Smash','Creating Limmygrok'
             ];
             let phraseIndex = Math.floor(Math.random() * loadingPhrases.length);
-            let dotCount = 1; 
-
+            let frameIndex = 0;
+            const dotFrames = ['.', ':', ': .', ': :', ': : .',': : : .',': : : :',': : : : .',': : : : :'];
             console.log(`\n[DEBUG] --- STREAM STARTED ---`);
 
             // 1. Start the animation interval IMMEDIATELY, before waiting on the API
             const editInterval = setInterval(async () => {
                 if (isFinished) return;
-
                 const displayContent = content
                     .replace(/<think>(?:[\s\S]*?<\/think>|[\s\S]*$)/gi, '')
                     .replace(/\[\d+\]/g, '')
@@ -88,12 +91,13 @@ module.exports = {
                 if (displayContent) {
                     safeContent = displayContent;
                 } else {
-                    safeContent = `*${loadingPhrases[phraseIndex]}${'.'.repeat(dotCount)}*`;
+                    safeContent = `*${loadingPhrases[phraseIndex]} ${dotFrames[frameIndex]}*`; 
                     
-                    dotCount++;
-                    if (dotCount > 3) {
-                        dotCount = 1; 
-                        phraseIndex = (phraseIndex + 1) % loadingPhrases.length; 
+                    frameIndex++;
+
+                    if (frameIndex >= dotFrames.length) {
+                        frameIndex = 0;
+                        phraseIndex = Math.floor(Math.random() * loadingPhrases.length); 
                     }
                 }
 

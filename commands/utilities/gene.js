@@ -3,7 +3,7 @@ const { SlashCommandBuilder } = require('discord.js');
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('generatestring')
-        .setDescription('Generates a string based on your input!')
+        .setDescription('Generates a string based on your input! (Legacy command, use @limmyGene instead)')
         .addStringOption((option) =>
             option.setName('input').setDescription('The input to use').setRequired(true)
         ),
