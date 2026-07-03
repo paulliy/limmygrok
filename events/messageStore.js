@@ -1,6 +1,7 @@
 const { Events } = require('discord.js');
 const { generateAutoresponce } = require('./autoresponce');
 const { getAutoResponseRate, resetAutoResponseCount } = require('./autoResponseState');
+const { parseimgs, safeLog, safeError } = require('../utils/parseimgs');
 
 module.exports = {
     name: Events.MessageCreate,
@@ -13,10 +14,10 @@ module.exports = {
         let memory = message.client.memory.get(channelId) || [];
 
         // Add the current message
-        memory.push({
-            role: 'user',
-            content: message.content
-        });
+        const parsed = parseimgs(message);
+        if (parsed.length > 0) {
+            memory.push(parsed[0]);
+        }
 
         // Keep only the last 20
         if (memory.length > 20) {
@@ -24,6 +25,8 @@ module.exports = {
         }
 
         message.client.memory.set(channelId, memory);
+
+        safeLog(`\n[DEBUG] Updated Memory:`, JSON.stringify(memory, null, 2));
 
         // Handle counter for auto-response
         let count = message.client.messageCounts.get(channelId) || 0;

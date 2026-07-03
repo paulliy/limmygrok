@@ -1,38 +1,7 @@
 const { MODEL_NAME } = require('../config.json');
+const { parseimgs, resolveImageUrlsToBase64, safeLog, safeError } = require('../utils/parseimgs');
 
-/**
- * Processes messages for the API by merging consecutive messages from the same role
- * and filtering out any empty messages. The OpenAI API requires roles to alternate
- * and for message content to be non-empty.
- * @param {Array<{role: string, content: string}>} messages The array of messages to process.
- * @returns {Array<{role: string, content: string}>} The processed messages.
- */
-function processMessagesForApi(messages) {
-    if (!messages || messages.length === 0) {
-        return [];
-    }
 
-    const nonEmptyMessages = messages.filter((msg) => msg.content && msg.content.trim() !== '');
-    if (nonEmptyMessages.length === 0) {
-        return [];
-    }
-
-    const merged = [];
-    let lastMessage = { ...nonEmptyMessages[0] };
-
-    for (let i = 1; i < nonEmptyMessages.length; i++) {
-        const currentMessage = nonEmptyMessages[i];
-        if (currentMessage.role === lastMessage.role) {
-            lastMessage.content += `\n${currentMessage.content}`;
-        } else {
-            merged.push(lastMessage);
-            lastMessage = { ...currentMessage };
-        }
-    }
-    merged.push(lastMessage);
-
-    return merged;
-}
 
 async function generateAutoresponce(message) {
     if (message.author.bot) return;
@@ -68,7 +37,7 @@ async function generateAutoresponce(message) {
     let frameIndex = 0;
     const dotFrames = ['.', ':', ': .', ': :', ': : .',': : : .',': : : :'];
 
-    console.log(`\n[DEBUG] --- AUTO-RESPONSE STREAM STARTED ---`);
+    safeLog(`\n[DEBUG] --- AUTO-RESPONSE STREAM STARTED ---`);
 
     let content = '';
     let lastDisplayedContent = '*Thinking.*';
@@ -107,14 +76,14 @@ async function generateAutoresponce(message) {
             await replyMessage.edit(chunkToSend);
             lastDisplayedContent = chunkToSend;
         } catch (error) {
-            console.error('\n[DEBUG Edit Error]:', error.message);
+            safeError('\n[DEBUG Edit Error]:', error.message);
         } finally {
             isEditing = false;
         }
     }, 1500);
 
     try {
-        const processedMessages = processMessagesForApi(contextMessages);
+        const processedMessages = parseimgs(contextMessages);
 
         if (processedMessages.length === 0) {
             isFinished = true;
@@ -125,11 +94,11 @@ async function generateAutoresponce(message) {
 
         const apiPayload = {
             model: MODEL_NAME,
-            messages: [{ role: 'system', content: 'You are a helpful assistant in a Discord chat.' }, ...processedMessages],
+            messages: [{ role: 'system', content: 'You are a helpful assistant in a Discord chat.' }, ...(await resolveImageUrlsToBase64(processedMessages))],
             stream: true,
         };
 
-        console.log(`\n[DEBUG] API Payload:`, JSON.stringify(apiPayload, null, 2));
+        safeLog(`\n[DEBUG] API Payload:`, JSON.stringify(apiPayload, null, 2));
 
         const stream = await openWebUI.chat.completions.create(apiPayload);
 
@@ -142,7 +111,7 @@ async function generateAutoresponce(message) {
         }
 
         isFinished = true;
-        console.log(`\n[DEBUG] --- AUTO-RESPONSE STREAM FINISHED ---`);
+        safeLog(`\n[DEBUG] --- AUTO-RESPONSE STREAM FINISHED ---`);
 
         const finalContent = content
             .replace(/<think>[\s\S]*?<\/think>/gi, '')
@@ -168,10 +137,10 @@ async function generateAutoresponce(message) {
         }
         message.client.memory.set(message.channel.id, currentMemory);
 
-        console.log(`\n[DEBUG] Updated Memory:`, JSON.stringify(currentMemory, null, 2));
+        safeLog(`\n[DEBUG] Updated Memory:`, JSON.stringify(currentMemory, null, 2));
 
     } catch (error) {
-        console.error('OpenWebUI Error:', error);
+        safeError('OpenWebUI Error:', error);
         await replyMessage.edit(`Error: ${error.message ?? 'Something went wrong.'}`).catch(() => {});
     } finally {
         isFinished = true;
