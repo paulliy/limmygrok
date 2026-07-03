@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls *)",
+      "Bash(find *)",
+      "Bash(grep *)",
+      "Bash(wc *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(pwd *)",
+      "Bash(date *)",
+      "Bash(echo *)",
+      "Bash(whoami *)",
+      "Bash(uptime *)",
+      "Bash(df *)",
+      "Bash(du *)",
+      "Bash(uname *)",
+      "Bash(type *)",
+      "Bash(which *)",
+      "Bash(id *)",
+      "Bash(true *)",
+      "Bash(false *)",
+      "Bash(sleep *)"
+    ]
+  }
+}

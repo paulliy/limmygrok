@@ -19,7 +19,10 @@ const {OpenAI} = require('openai');
 // The distinction between `client: Client<boolean>` and `readyClient: Client<true>` is important for TypeScript developers.
 // The distinction between `client: Client` and `readyClient: Client<true>` is important for TypeScript developers.
 // It makes some properties non-nullable.
-client.commands = new Collection(); 
+client.commands = new Collection();
+client.memory = new Collection();
+client.messageCounts = new Collection();
+client.autoResponseRates = new Map();
 
 const openWebUI = new OpenAI({
   apiKey: APIkey,

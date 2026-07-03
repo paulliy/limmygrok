@@ -9,8 +9,8 @@ module.exports = {
 
         if (message.mentions.has(message.client.user)) {
             const { cooldowns } = message.client;
-            const commandName = 'mention'; 
-            const defaultCooldownDuration = 5; 
+            const commandName = 'mention';
+            const defaultCooldownDuration = 5;
 
             if (!cooldowns.has(commandName)) {
                 cooldowns.set(commandName, new Collection());
@@ -24,7 +24,7 @@ module.exports = {
                 const expirationTime = timestamps.get(message.author.id) + cooldownAmount;
                 if (now < expirationTime) return;
             }
-            
+
             const openWebUI = message.client.openWebUI;
 
             await message.channel.sendTyping();
@@ -47,19 +47,19 @@ module.exports = {
 
             if (!messageContent) {
                 message.reply('Ask me smth chud...');
-                clearInterval(typingInterval); 
+                clearInterval(typingInterval);
                 return;
             }
 
-            let replyMessage = await message.reply('*Thinking.*'); 
+            let replyMessage = await message.reply('*Thinking.*');
 
             let content = '';
-            let lastDisplayedContent = '*Thinking.*'; 
+            let lastDisplayedContent = '*Thinking.*';
             let isEditing = false;
             let isFinished = false;
 
             const loadingPhrases = [
-                'Thinking', 'Pondering', 'Questing', 'Holding site', 
+                'Thinking', 'Pondering', 'Questing', 'Holding site',
                 'Playing Valorant', 'Winning', 'Cooking', 'Strategizing',
                 'Turtletiming', 'Coding', 'Synthizing', 'Baldliking',
                 'Chudding', 'Meowling', 'Climbing rocks', 'Whiffing hard',
@@ -72,11 +72,12 @@ module.exports = {
                 'Stargazing','Learning','Building','Sleeping','Flicking',
                 'Waiting for tim','Scrolling','Watching cote','Holding mid',
                 'Whiffing again','Full buying','Picking up the bomb','Defusing','Planting','Rotating',
-                'Joining VC','Wordle streaking','Playing Smash','Creating Limmygrok'
+                'Joining VC','Wordle streaking','Playing Smash','Creating Limmygrok','Deadlotting',
+                'Queuing','Gooning','Mutting','Baiting','Boosting'
             ];
             let phraseIndex = Math.floor(Math.random() * loadingPhrases.length);
             let frameIndex = 0;
-            const dotFrames = ['.', ':', ': .', ': :', ': : .',': : : .',': : : :',': : : : .',': : : : :'];
+            const dotFrames = ['.', ':', ': .', ': :', ': : .',': : : .',': : : :'];
             console.log(`\n[DEBUG] --- STREAM STARTED ---`);
 
             // 1. Start the animation interval IMMEDIATELY, before waiting on the API
@@ -88,22 +89,21 @@ module.exports = {
                     .trim();
 
                 let safeContent;
-                
+
                 if (displayContent) {
                     safeContent = displayContent;
                 } else {
-                    safeContent = `*${loadingPhrases[phraseIndex]} ${dotFrames[frameIndex]}*`; 
-                    
+                    safeContent = `*${loadingPhrases[phraseIndex]} ${dotFrames[frameIndex]}*`;
+
                     frameIndex++;
 
                     if (frameIndex >= dotFrames.length) {
                         frameIndex = 0;
-                        phraseIndex = Math.floor(Math.random() * loadingPhrases.length); 
+                        phraseIndex = Math.floor(Math.random() * loadingPhrases.length);
                     }
                 }
 
                 const chunkToSend = safeContent.slice(0, 2000);
-
                 if (isEditing || chunkToSend === lastDisplayedContent) return;
 
                 isEditing = true;
@@ -117,14 +117,19 @@ module.exports = {
                 }
             }, 1500);
 
-            try { 
+            try {
+                const history = message.client.memory.get(message.channel.id) || [];
+                console.log(`\n[DEBUG] Retrieved History:`, JSON.stringify(history, null, 2));
                 const apiPayload = {
                     model: MODEL_NAME,
                     messages: [
+                        ...history.slice(-5).map(m => ({ role: m.role, content: m.content })),
                         { role: 'user', content: messageContent }
                     ],
                     stream: true,
                 };
+                console.log(`\n[DEBUG] API Payload:`, JSON.stringify(apiPayload, null, 2));
+                console.log(`\n[DEBUG] API Payload:`, JSON.stringify(apiPayload, null, 2));
 
                 // 2. Now await the API (the animation is already running in the background)
                 const stream = await openWebUI.chat.completions.create(apiPayload);
@@ -136,7 +141,7 @@ module.exports = {
                         process.stdout.write(deltaContent);
                     }
                 }
-                
+
                 isFinished = true;
                 console.log(`\n[DEBUG] --- STREAM FINISHED ---`);
 
@@ -144,9 +149,9 @@ module.exports = {
                     .replace(/<think>[\s\S]*?<\/think>/gi, '')
                     .replace(/\[\d+\]/g, '')
                     .trim();
-                
-                const truncatedFinalContent = finalContent.length > 2000 
-                    ? finalContent.slice(0, 1997) + '...' 
+
+                const truncatedFinalContent = finalContent.length > 2000
+                    ? finalContent.slice(0, 1997) + '/...'
                     : finalContent;
 
                 if (!finalContent) {
@@ -156,12 +161,21 @@ module.exports = {
 
                 await replyMessage.edit(truncatedFinalContent);
 
+                // Add the bot's final response to the memory
+                let currentMemory = message.client.memory.get(message.channel.id) || [];
+                currentMemory.push({ role: 'assistant', content: finalContent });
+                if (currentMemory.length > 5) {
+                    currentMemory = currentMemory.slice(-5);
+                }
+                message.client.memory.set(message.channel.id, currentMemory);
+                console.log(`\n[DEBUG] Updated Memory:`, JSON.stringify(currentMemory, null, 2));
+
             } catch (error) {
                 console.error('OpenWebUI Error:', error);
                 await replyMessage.edit(`Error: ${error.message ?? 'Something went wrong.'}`).catch(() => {});
             } finally {
                 // Ensure intervals are always cleared, even if the API throws an error
-                isFinished = true; 
+                isFinished = true;
                 clearInterval(editInterval);
                 clearInterval(typingInterval);
             }

@@ -30,7 +30,7 @@ module.exports = {
 				const expiredTimestamp = Math.round(expirationTime / 1000);
 				return interaction.reply({
 					content: `Please wait, you are on a cooldown for \`${command.data.name}\`. You can use it again <t:${expiredTimestamp}:R>.`,
-					ephemeral: true,
+					flags: MessageFlags.Ephemeral,
 				});
 			}
 		}
@@ -42,7 +42,7 @@ module.exports = {
 			await command.execute(interaction);
 		} catch (error) {
 			console.error(error);
-			const replyOptions = { content: 'There was an error while executing this command!', ephemeral: true };
+			const replyOptions = { content: 'There was an error while executing this command!', flags: MessageFlags.Ephemeral };
 			if (interaction.replied || interaction.deferred) {
 				await interaction.followUp(replyOptions);
 			} else {
