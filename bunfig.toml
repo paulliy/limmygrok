@@ -1,0 +1,5 @@
+# Test-run preload: generates a dummy config.json in environments that
+# don't have a real one (CI, fresh clones), so `bun test` works without
+# secrets. See tests/preload.js.
+[test]
+preload = ["./tests/preload.js"]

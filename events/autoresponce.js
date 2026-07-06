@@ -1,7 +1,7 @@
 const { MODEL_NAME } = require('../config.json');
 const { parseimgs, resolveImageUrlsToBase64, safeLog, safeError, createChatCompletionWithFallback, SYSTEM_PROMPT } = require('../utils/parseimgs');
 const { recordEvent } = require('../utils/stats');
-const { createStreamAnimator, stripThinkAndCitations, truncateForDiscord } = require('../utils/streamingReply');
+const { createStreamAnimator, stripThinkAndCitations, truncateForDiscord, INITIAL_LOADING_TEXT } = require('../utils/streamingReply');
 
 
 
@@ -21,7 +21,7 @@ async function generateAutoresponce(message) {
     const openWebUI = message.client.openWebUI;
     let replyMessage;
     try {
-        replyMessage = await message.reply('*Thinking.*');
+        replyMessage = await message.reply(INITIAL_LOADING_TEXT);
     } catch (error) {
         safeError('Failed to send initial auto-response reply:', error);
         return;

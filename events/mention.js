@@ -2,7 +2,7 @@ const { Events, Collection } = require('discord.js');
 const { MODEL_NAME } = require('../config.json');
 const { parseimgs, resolveImageUrlsToBase64, safeLog, safeError, createChatCompletionWithFallback, SYSTEM_PROMPT } = require('../utils/parseimgs');
 const { recordEvent } = require('../utils/stats');
-const { createStreamAnimator, stripThinkAndCitations, truncateForDiscord } = require('../utils/streamingReply');
+const { createStreamAnimator, stripThinkAndCitations, truncateForDiscord, INITIAL_LOADING_TEXT } = require('../utils/streamingReply');
 
 module.exports = {
     name: Events.MessageCreate,
@@ -106,7 +106,7 @@ module.exports = {
 
                 message.client.memory.set(message.channel.id, history);
 
-                replyMessage = await message.reply('*Thinking.*');
+                replyMessage = await message.reply(INITIAL_LOADING_TEXT);
 
                 safeLog(`\n[DEBUG] --- STREAM STARTED ---`);
 

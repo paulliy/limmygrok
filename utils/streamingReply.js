@@ -24,6 +24,27 @@ const LOADING_PHRASES = [
 
 const DOT_FRAMES = ['.', ':', ': .', ': :', ': : .', ': : : .', ': : : :'];
 
+// Discord's `ansi` code-block renderer only understands a limited SGR subset:
+// styles 0 (reset)/1 (bold)/4 (underline), and fg colors 30-37. No "dim" (2).
+// The phrase and the animated dots share one color (gray) so the whole loading
+// line reads as a single muted unit.
+const ANSI_RESET = '\x1b[0m';
+const ANSI_GRAY = '\x1b[0;37m'; // white
+
+function ansiFence(body) {
+    return '```ansi\n' + body + '\n```';
+}
+
+function formatAnsiLoadingLine(phrase, dots) {
+    return ansiFence(`${ANSI_GRAY}${phrase} ${dots}${ANSI_RESET}`);
+}
+
+function formatAnsiIdleText(text) {
+    return ansiFence(`${ANSI_GRAY}${text}${ANSI_RESET}`);
+}
+
+const INITIAL_LOADING_TEXT = formatAnsiIdleText('Thinking...');
+
 function stripThinkAndCitations(text, { partial = false } = {}) {
     const thinkPattern = partial
         ? /<think>(?:[\s\S]*?<\/think>|[\s\S]*$)/gi
@@ -40,7 +61,7 @@ function truncateForDiscord(text, limit = 2000) {
 // (so Discord rate limits never block token reads) repaints either the
 // accumulating content or an animated loading phrase, coalescing edits so
 // identical repaints are skipped.
-function createStreamAnimator({ edit, usePhrases = true, idleText = '*Thinking...*', intervalMs = 1500 }) {
+function createStreamAnimator({ edit, usePhrases = true, idleText = 'Thinking...', intervalMs = 1500 }) {
     let content = '';
     let lastDisplayed = null;
     let isEditing = false;
@@ -57,14 +78,14 @@ function createStreamAnimator({ edit, usePhrases = true, idleText = '*Thinking..
         if (displayContent) {
             safeContent = displayContent;
         } else if (usePhrases) {
-            safeContent = `*${LOADING_PHRASES[phraseIndex]} ${DOT_FRAMES[frameIndex]}*`;
+            safeContent = formatAnsiLoadingLine(LOADING_PHRASES[phraseIndex], DOT_FRAMES[frameIndex]);
             frameIndex++;
             if (frameIndex >= DOT_FRAMES.length) {
                 frameIndex = 0;
                 phraseIndex = Math.floor(Math.random() * LOADING_PHRASES.length);
             }
         } else {
-            safeContent = idleText;
+            safeContent = formatAnsiIdleText(idleText);
         }
 
         const chunk = truncateForDiscord(safeContent);
@@ -101,4 +122,7 @@ module.exports = {
     stripThinkAndCitations,
     truncateForDiscord,
     createStreamAnimator,
+    formatAnsiLoadingLine,
+    formatAnsiIdleText,
+    INITIAL_LOADING_TEXT,
 };

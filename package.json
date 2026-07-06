@@ -7,8 +7,12 @@
   "name": "limmygrok",
   "module": "index.js",
   "scripts": {
+    "start": "bun index.js",
     "test": "bun test",
     "dashboard": "bun run dashboard/server.js"
+  },
+  "engines": {
+    "bun": ">=1.3.14"
   },
   "private": true,
   "devDependencies": {

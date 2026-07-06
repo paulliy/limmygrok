@@ -22,4 +22,15 @@ function assertRequiredConfig(config, requiredKeys) {
     }
 }
 
-module.exports = { missingConfigKeys, assertRequiredConfig };
+// Guarded load so entrypoints can print one clear FATAL line when the file
+// is absent (e.g. a container without the bind-mount) instead of crashing
+// with a raw MODULE_NOT_FOUND before validation ever runs.
+function loadConfig() {
+    try {
+        return require('../config.json');
+    } catch (e) {
+        return null;
+    }
+}
+
+module.exports = { missingConfigKeys, assertRequiredConfig, loadConfig };

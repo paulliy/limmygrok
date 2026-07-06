@@ -1,16 +1,21 @@
 // Require the necessary discord.js classes
 const { Client, Events, GatewayIntentBits, Collection, MessageFlags} = require('discord.js');
-const config = require('./config.json');
 const fs = require('node:fs');
 const path = require('node:path');
 const { safeLog, safeError } = require('./utils/parseimgs');
 const { openDatabase, PersistentMap } = require('./utils/db');
 const { pruneStatsEvents } = require('./utils/stats');
-const { assertRequiredConfig } = require('./utils/config');
+const { assertRequiredConfig, loadConfig } = require('./utils/config');
 
 // Fail fast with one clear message instead of a cryptic downstream error
-// (bad-token login, `undefined` model in API payloads). SYSTEM_PROMPT is
-// optional — utils/parseimgs.js falls back to a default.
+// (raw MODULE_NOT_FOUND, bad-token login, `undefined` model in API
+// payloads). SYSTEM_PROMPT is optional — utils/parseimgs.js falls back to
+// a default.
+const config = loadConfig();
+if (!config) {
+    safeError('[FATAL] config.json not found next to index.js. In Docker, bind-mount it: -v /path/to/config.json:/app/config.json:ro');
+    process.exit(1);
+}
 try {
     assertRequiredConfig(config, ['token', 'APIkey', 'API_BASE_URL', 'MODEL_NAME']);
 } catch (error) {
@@ -39,7 +44,9 @@ client.commands = new Collection();
 // SQLite-backed state: conversation memory, per-channel message counts, and
 // auto-response rate settings all survive restarts. PersistentMap has the same
 // get/set interface as the Collections/Maps it replaces.
-const db = openDatabase(path.join(__dirname, 'data.sqlite'));
+// DATA_DIR lets a container point this at a mounted volume; unset, the
+// database lives next to index.js exactly as before.
+const db = openDatabase(path.join(process.env.DATA_DIR || __dirname, 'data.sqlite'));
 client.db = db;
 client.memory = new PersistentMap(db, 'memory');
 client.messageCounts = new PersistentMap(db, 'messageCounts');

@@ -1,10 +1,14 @@
 const { REST, Routes } = require('discord.js');
-const config = require('./config.json');
 const fs = require('node:fs');
 const path = require('node:path');
 const { safeLog, safeError } = require('./utils/parseimgs');
-const { assertRequiredConfig } = require('./utils/config');
+const { assertRequiredConfig, loadConfig } = require('./utils/config');
 
+const config = loadConfig();
+if (!config) {
+	safeError('[FATAL] config.json not found next to deploy-commands.js. In Docker, bind-mount it: -v /path/to/config.json:/app/config.json:ro');
+	process.exit(1);
+}
 try {
 	assertRequiredConfig(config, ['clientId', 'guildId', 'token']);
 } catch (error) {
