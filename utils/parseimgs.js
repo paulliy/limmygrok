@@ -1,12 +1,15 @@
 'use strict';
 
-const util = require('util');
+const dns = require('dns').promises;
 let config = {};
 try {
     config = require('../config.json');
 } catch (e) {
     // Ignore if not present
 }
+
+const DEFAULT_SYSTEM_PROMPT = 'You are a helpful assistant in a Discord chat.';
+const SYSTEM_PROMPT = config.SYSTEM_PROMPT || DEFAULT_SYSTEM_PROMPT;
 
 const URL_REGEX = /https?:\/\/[^\s]+/gi;
 const IMAGE_MIME_TYPES_BY_EXTENSION = {
@@ -31,6 +34,87 @@ function isImageUrl(url) {
     }
 }
 
+function isPrivateIp(ip) {
+    if (!ip) return true; // Treat empty/falsy IPs as unsafe/private
+    
+    // IPv4 Check
+    const ipv4Regex = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+    const ipv4Match = ip.match(ipv4Regex);
+    if (ipv4Match) {
+        const parts = ipv4Match.slice(1).map(Number);
+        if (parts.some(p => p < 0 || p > 255)) return true; // Invalid IPv4, treat as unsafe
+        const [a, b, c, d] = parts;
+        
+        // 127.0.0.0/8 (Loopback)
+        if (a === 127) return true;
+        // 10.0.0.0/8 (Private network)
+        if (a === 10) return true;
+        // 172.16.0.0/12 (Private network)
+        if (a === 172 && (b >= 16 && b <= 31)) return true;
+        // 192.168.0.0/16 (Private network)
+        if (a === 192 && b === 168) return true;
+        // 169.254.0.0/16 (Link-local)
+        if (a === 169 && b === 254) return true;
+        // 0.0.0.0/8 (Local / broadcast)
+        if (a === 0) return true;
+        // 100.64.0.0/10 (Carrier-grade NAT)
+        if (a === 100 && (b >= 64 && b <= 127)) return true;
+        // 192.0.0.0/24 (IETF Protocol Assignments)
+        if (a === 192 && b === 0 && c === 0) return true;
+        // 192.0.2.0/24 (TEST-NET-1)
+        if (a === 192 && b === 0 && c === 2) return true;
+        // 198.18.0.0/15 (Benchmark testing)
+        if (a === 198 && (b >= 18 && b <= 19)) return true;
+        // 198.51.100.0/24 (TEST-NET-2)
+        if (a === 198 && b === 51 && c === 100) return true;
+        // 203.0.113.0/24 (TEST-NET-3)
+        if (a === 203 && b === 0 && c === 113) return true;
+        // 224.0.0.0/4 (Multicast)
+        if (a >= 224) return true;
+        
+        return false;
+    }
+    
+    // IPv6 Check
+    const ipv6 = ip.toLowerCase().replace(/[\[\]]/g, '').trim();
+    if (ipv6 === '::1' || ipv6 === '::') return true;
+    
+    // Unique local address fc00::/7 (f[c-d][0-9a-f]...)
+    if (/^[fF][c-dCD]/i.test(ipv6)) return true;
+    // Link-local fe80::/10 (f[e-f][8-b][0-9a-f]...)
+    if (/^[fF][eE][89abAB]/i.test(ipv6)) return true;
+    
+    // IPv4-mapped IPv6 address (e.g. ::ffff:127.0.0.1)
+    if (ipv6.startsWith('::ffff:')) {
+        const remaining = ipv6.substring(7);
+        if (ipv4Regex.test(remaining)) {
+            return isPrivateIp(remaining);
+        }
+    }
+    
+    return false;
+}
+
+async function isSafeUrl(url) {
+    try {
+        const parsed = new URL(url);
+        const hostname = parsed.hostname;
+        
+        // Resolve all IPs for the hostname
+        const addresses = await dns.lookup(hostname, { all: true });
+        
+        for (const addr of addresses) {
+            if (isPrivateIp(addr.address)) {
+                return false;
+            }
+        }
+        return true;
+    } catch (e) {
+        // If lookup fails or URL is invalid, treat as unsafe
+        return false;
+    }
+}
+
 async function downloadImageAsBase64(url) {
     try {
         if (!url) return null;
@@ -41,14 +125,80 @@ async function downloadImageAsBase64(url) {
             return url;
         }
 
-        const response = await fetch(url);
-        if (!response.ok) {
-            safeError(`Failed to download image: ${response.status} ${response.statusText} from ${url}`);
-            return url; // Fallback to original URL
+        // Only download images from Discord's CDN or media proxy hosts
+        let parsed;
+        try {
+            parsed = new URL(url);
+        } catch (e) {
+            return url;
         }
-        const arrayBuffer = await response.arrayBuffer();
-        const contentType = getImageMimeType(url, response.headers?.get?.('content-type'));
-        return `data:${contentType};base64,${Buffer.from(arrayBuffer).toString('base64')}`;
+        const hostname = parsed.hostname.toLowerCase();
+        const allowedHosts = ['cdn.discordapp.com', 'media.discordapp.net'];
+        if (!allowedHosts.includes(hostname)) {
+            return url; // Fallback to raw URL unresolved
+        }
+
+        // SSRF check
+        if (!await isSafeUrl(url)) {
+            safeError(`Refusing to fetch unsafe URL: ${url}`);
+            return url;
+        }
+
+        try {
+            const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
+            if (!response.ok) {
+                safeError(`Failed to download image: ${response.status} ${response.statusText} from ${url}`);
+                return url; // Fallback to original URL
+            }
+
+            const contentLength = response.headers.get('content-length');
+            const maxBytes = 10 * 1024 * 1024; // 10MB cap
+
+            if (contentLength) {
+                const size = parseInt(contentLength, 10);
+                if (isNaN(size) || size > maxBytes) {
+                    safeError(`Image size limit exceeded or invalid content-length: ${contentLength} from ${url}`);
+                    return url;
+                }
+            }
+
+            let buffer;
+            if (response.body && typeof response.body.getReader === 'function') {
+                const reader = response.body.getReader();
+                const chunks = [];
+                let totalLength = 0;
+                try {
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        totalLength += value.length;
+                        if (totalLength > maxBytes) {
+                            await reader.cancel();
+                            safeError(`Image size limit exceeded during stream from ${url}`);
+                            return url;
+                        }
+                        chunks.push(value);
+                    }
+                } finally {
+                    reader.releaseLock();
+                }
+                buffer = Buffer.concat(chunks);
+            } else {
+                // Fallback for mock/test fetch where response.body is not a web stream
+                const arrayBuffer = await response.arrayBuffer();
+                if (arrayBuffer.byteLength > maxBytes) {
+                    safeError(`Image size limit exceeded: ${url}`);
+                    return url;
+                }
+                buffer = Buffer.from(arrayBuffer);
+            }
+
+            const contentType = getImageMimeType(url, response.headers?.get?.('content-type'));
+            return `data:${contentType};base64,${buffer.toString('base64')}`;
+        } catch (fetchErr) {
+            safeError(`Fetch error downloading image from ${url}:`, fetchErr);
+            return url;
+        }
     } catch (e) {
         safeError(`Error downloading image from ${url}:`, e);
         return url; // Fallback to original URL
@@ -172,7 +322,16 @@ function parseDiscordMessage(message) {
     const attachments = message.attachments || [];
     
     const { text: parsedText, imageUrls } = parseTextAndImages(text, attachments);
-    const content = formatContent(parsedText, imageUrls);
+    
+    let finalParsedText = parsedText;
+    if (role === 'user' && message.author && parsedText && parsedText.trim() !== '') {
+        const name = message.member?.displayName || message.author.displayName || message.author.username;
+        if (name) {
+            finalParsedText = `${name}: ${parsedText}`;
+        }
+    }
+
+    const content = formatContent(finalParsedText, imageUrls);
     
     return { role, content };
 }
@@ -342,5 +501,6 @@ module.exports = {
     resolveImageUrlsToBase64,
     safeLog,
     safeError,
-    createChatCompletionWithFallback
+    createChatCompletionWithFallback,
+    SYSTEM_PROMPT
 };

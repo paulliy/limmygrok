@@ -1,10 +1,23 @@
 // Require the necessary discord.js classes
 const { Client, Events, GatewayIntentBits, Collection, MessageFlags} = require('discord.js');
-const { token, APIkey, API_BASE_URL } = require('./config.json');
+const config = require('./config.json');
 const fs = require('node:fs');
 const path = require('node:path');
 const { safeLog, safeError } = require('./utils/parseimgs');
 const { openDatabase, PersistentMap } = require('./utils/db');
+const { pruneStatsEvents } = require('./utils/stats');
+const { assertRequiredConfig } = require('./utils/config');
+
+// Fail fast with one clear message instead of a cryptic downstream error
+// (bad-token login, `undefined` model in API payloads). SYSTEM_PROMPT is
+// optional — utils/parseimgs.js falls back to a default.
+try {
+    assertRequiredConfig(config, ['token', 'APIkey', 'API_BASE_URL', 'MODEL_NAME']);
+} catch (error) {
+    safeError(`[FATAL] ${error.message}`);
+    process.exit(1);
+}
+const { token, APIkey, API_BASE_URL } = config;
 // Create a new client instance
 const client = new Client({
     intents: [
@@ -35,6 +48,13 @@ client.autoResponseRates = new PersistentMap(db, 'autoResponseRates');
 // channelId -> guildId. Empty = the bot auto-responds nowhere until an admin
 // runs /channels add. (Direct @mentions are never gated by this.)
 client.allowedChannels = new PersistentMap(db, 'allowedChannels');
+
+// The stats_events usage log is append-only; prune old rows at startup and
+// once a day so the database doesn't grow unbounded. unref() (where the
+// runtime supports it) keeps this timer from holding the process open.
+pruneStatsEvents(db);
+const statsPruneInterval = setInterval(() => pruneStatsEvents(db), 24 * 60 * 60 * 1000);
+statsPruneInterval.unref?.();
 
 const openWebUI = new OpenAI({
   apiKey: APIkey,
@@ -130,4 +150,7 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 // Log in to Discord with your client's token
-client.login(token);
+client.login(token).catch(async (error) => {
+	safeError('[FATAL] Failed to log in to Discord:', error);
+	await shutdown('LOGIN_FAIL', 1);
+});

@@ -1,6 +1,7 @@
 const { MODEL_NAME } = require('../config.json');
-const { parseimgs, resolveImageUrlsToBase64, safeLog, safeError, createChatCompletionWithFallback } = require('../utils/parseimgs');
+const { parseimgs, resolveImageUrlsToBase64, safeLog, safeError, createChatCompletionWithFallback, SYSTEM_PROMPT } = require('../utils/parseimgs');
 const { recordEvent } = require('../utils/stats');
+const { createStreamAnimator, stripThinkAndCitations, truncateForDiscord } = require('../utils/streamingReply');
 
 
 
@@ -26,86 +27,34 @@ async function generateAutoresponce(message) {
         return;
     }
 
-    const loadingPhrases = [
-        'Thinking', 'Pondering', 'Questing', 'Holding site',
-        'Playing Valorant', 'Winning', 'Cooking', 'Strategizing',
-        'Turtletiming', 'Coding', 'Synthizing', 'Baldliking',
-        'Chudding', 'Meowling', 'Climbing rocks', 'Whiffing hard',
-        'Bawberrying', 'Bankheading', 'Geneing', 'Limmying', 'Praying',
-        'Five Stacking A', 'Dying mid', 'Eating Goldfish',
-        'Saving the World', 'Plain Janing','Ai-ing','Listening to AJR',
-        'Getting a new permit','Watching the sunset','Reading','Writing',
-        'Exploring','Juggling','Watching cote','Holding mid',
-        'Whiffing again','Full buying','Picking up the bomb','Defusing','Planting','Rotating',
-        'Joining VC','Wordle streaking','Playing Smash','Creating Limmygrok','Deadlotting',
-        'Queuing','Gooning','Mutting','Baiting','Boosting'
-    ];
-    let phraseIndex = Math.floor(Math.random() * loadingPhrases.length);
-    let frameIndex = 0;
-    const dotFrames = ['.', ':', ': .', ': :', ': : .',': : : .',': : : :'];
-
     safeLog(`\n[DEBUG] --- AUTO-RESPONSE STREAM STARTED ---`);
 
-    let content = '';
-    let lastDisplayedContent = '*Thinking.*';
-    let isEditing = false;
-    let isFinished = false;
-
     // 1. Start the animation interval IMMEDIATELY
-    const editInterval = setInterval(async () => {
-        if (isFinished) return;
-
-        const displayContent = content
-            .replace(/<think>(?:[\s\S]*?<\/think>|[\s\S]*$)/gi, '')
-            .replace(/\[\d+\]/g, '')
-            .trim();
-
-        let safeContent;
-
-        if (displayContent) {
-            safeContent = displayContent;
-        } else {
-            safeContent = `*${loadingPhrases[phraseIndex]} ${dotFrames[frameIndex]}*`;
-
-            frameIndex++;
-
-            if (frameIndex >= dotFrames.length) {
-                frameIndex = 0;
-                phraseIndex = Math.floor(Math.random() * loadingPhrases.length);
-            }
-        }
-
-        const chunkToSend = safeContent.slice(0, 2000);
-        if (isEditing || chunkToSend === lastDisplayedContent) return;
-
-        isEditing = true;
-        try {
-            await replyMessage.edit(chunkToSend);
-            lastDisplayedContent = chunkToSend;
-        } catch (error) {
-            safeError('\n[DEBUG Edit Error]:', error.message);
-        } finally {
-            isEditing = false;
-        }
-    }, 1500);
+    const animator = createStreamAnimator({
+        edit: (chunk) => replyMessage.edit(chunk),
+    });
 
     try {
         const processedMessages = parseimgs(contextMessages);
 
         if (processedMessages.length === 0) {
-            isFinished = true;
-            clearInterval(editInterval);
+            animator.finish();
             await replyMessage.delete().catch(() => {}); // Clean up the "Thinking" message
             return;
         }
 
-        const apiPayload = {
+        const logPayload = {
             model: MODEL_NAME,
-            messages: [{ role: 'system', content: 'You are a helpful assistant in a Discord chat.' }, ...(await resolveImageUrlsToBase64(processedMessages))],
+            messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...processedMessages],
             stream: true,
         };
+        safeLog(`\n[DEBUG] API Payload (pre-resolution):`, JSON.stringify(logPayload, null, 2));
 
-        safeLog(`\n[DEBUG] API Payload:`, JSON.stringify(apiPayload, null, 2));
+        const apiPayload = {
+            model: MODEL_NAME,
+            messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...(await resolveImageUrlsToBase64(processedMessages))],
+            stream: true,
+        };
 
         const completion = await createChatCompletionWithFallback(openWebUI, apiPayload);
 
@@ -113,25 +62,20 @@ async function generateAutoresponce(message) {
             for await (const chunk of completion.stream) {
                 const deltaContent = chunk.choices?.[0]?.delta?.content;
                 if (deltaContent) {
-                    content += deltaContent;
+                    animator.append(deltaContent);
                     process.stdout.write(deltaContent);
                 }
             }
         } else {
-            content = completion.response?.choices?.[0]?.message?.content || '';
+            animator.append(completion.response?.choices?.[0]?.message?.content || '');
         }
 
-        isFinished = true;
+        animator.finish();
         safeLog(`\n[DEBUG] --- AUTO-RESPONSE STREAM FINISHED ---`);
 
-        const finalContent = content
-            .replace(/<think>[\s\S]*?<\/think>/gi, '')
-            .replace(/\[\d+\]/g, '')
-            .trim();
+        const finalContent = stripThinkAndCitations(animator.content);
 
-        const truncatedFinalContent = finalContent.length > 2000
-            ? finalContent.slice(0, 1997) + '...'
-            : finalContent;
+        const truncatedFinalContent = truncateForDiscord(finalContent);
 
         if (!finalContent) {
             await replyMessage.edit('The model only returned thinking content with no final response.');
@@ -156,11 +100,11 @@ async function generateAutoresponce(message) {
         safeLog(`\n[DEBUG] Updated Memory:`, JSON.stringify(currentMemory, null, 2));
 
     } catch (error) {
+        animator.finish();
         safeError('OpenWebUI Error:', error);
         await replyMessage.edit(`Error: ${error.message ?? 'Something went wrong.'}`).catch(() => {});
     } finally {
-        isFinished = true;
-        clearInterval(editInterval);
+        animator.finish();
     }
 }
 

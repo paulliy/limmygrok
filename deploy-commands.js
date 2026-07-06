@@ -1,8 +1,17 @@
 const { REST, Routes } = require('discord.js');
-const { clientId, guildId, token } = require('./config.json');
+const config = require('./config.json');
 const fs = require('node:fs');
 const path = require('node:path');
 const { safeLog, safeError } = require('./utils/parseimgs');
+const { assertRequiredConfig } = require('./utils/config');
+
+try {
+	assertRequiredConfig(config, ['clientId', 'guildId', 'token']);
+} catch (error) {
+	safeError(`[FATAL] ${error.message}`);
+	process.exit(1);
+}
+const { clientId, guildId, token } = config;
 
 const commands = [];
 // Grab all the command folders from the commands directory you created earlier

@@ -1,20 +1,35 @@
 const { test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const dns = require('dns');
 
 const realConsoleLog = console.log;
 const realConsoleError = console.error;
 const realStdoutWrite = process.stdout.write;
+const realLookup = dns.promises.lookup;
 
 beforeEach(() => {
     console.log = () => {};
     console.error = () => {};
     process.stdout.write = () => true;
+    dns.promises.lookup = async (hostname) => {
+        if (hostname === 'localhost' || hostname === '127.0.0.1') {
+            return [{ address: '127.0.0.1', family: 4 }];
+        }
+        if (hostname === '169.254.169.254') {
+            return [{ address: '169.254.169.254', family: 4 }];
+        }
+        if (hostname === '10.0.0.1') {
+            return [{ address: '10.0.0.1', family: 4 }];
+        }
+        return [{ address: '8.8.8.8', family: 4 }];
+    };
 });
 
 afterEach(() => {
     console.log = realConsoleLog;
     console.error = realConsoleError;
     process.stdout.write = realStdoutWrite;
+    dns.promises.lookup = realLookup;
 });
 
 // --- Mocking Discord.js ---
@@ -33,7 +48,7 @@ require.cache[require.resolve('discord.js')] = {
 };
 
 // Import modules under test
-const { isImageUrl, parseTextAndImages, parseimgs } = require('../utils/parseimgs');
+const { isImageUrl, parseTextAndImages, parseimgs, resolveImageUrlsToBase64 } = require('../utils/parseimgs');
 const autoresponce = require('../events/autoresponce');
 const messageStore = require('../events/messageStore');
 const mention = require('../events/mention');
@@ -576,3 +591,215 @@ test('Log scrubbing - OpenAI error leaking API key in stack/message is redacted'
     assert.ok(hasRedacted, 'OpenAI API key should be redacted in error logs');
     assert.ok(!hasLeak, 'OpenAI API key should not be present in error logs');
 });
+
+test('Mention check - ignores everyone and roles', async () => {
+    const mockClientUser = { id: 'bot-123', username: 'limmybot' };
+    const hasMock = mockFn((target, options) => {
+        if (options && options.ignoreEveryone && options.ignoreRoles) {
+            return false; // Ignored when filters are active
+        }
+        return true; // Returns true under old/unfiltered check
+    });
+    
+    const msg = createMockMessage({
+        content: 'hello @everyone',
+        mentions: {
+            has: hasMock,
+            roles: new Map(),
+            users: new Map()
+        }
+    });
+
+    await mention.execute(msg);
+    assert.equal(msg.channel.sendTyping.mock.calls.length, 0);
+    assert.equal(msg.reply.mock.calls.length, 0);
+});
+
+test('Image download - blocks private and loopback IPs (SSRF mitigation)', async () => {
+    const originalFetch = global.fetch;
+    let fetchCalled = false;
+    global.fetch = async () => {
+        fetchCalled = true;
+        return {
+            ok: true,
+            headers: {
+                get: (name) => null
+            },
+            arrayBuffer: async () => Buffer.from('abc')
+        };
+    };
+    
+    try {
+        // 1. Unsafe host (localhost)
+        const resolvedLocalhost = await resolveImageUrlsToBase64([{
+            role: 'user',
+            content: [{
+                type: 'image_url',
+                image_url: { url: 'http://localhost/image.png' }
+            }]
+        }]);
+        assert.equal(resolvedLocalhost[0].content[0].image_url.url, 'http://localhost/image.png');
+        assert.equal(fetchCalled, false);
+
+        // 2. Unsafe IP (169.254.169.254)
+        const resolvedMetadata = await resolveImageUrlsToBase64([{
+            role: 'user',
+            content: [{
+                type: 'image_url',
+                image_url: { url: 'http://169.254.169.254/meta.png' }
+            }]
+        }]);
+        assert.equal(resolvedMetadata[0].content[0].image_url.url, 'http://169.254.169.254/meta.png');
+        assert.equal(fetchCalled, false);
+
+        // 3. Safe host (resolves to 8.8.8.8 in tests)
+        const resolvedSafe = await resolveImageUrlsToBase64([{
+            role: 'user',
+            content: [{
+                type: 'image_url',
+                image_url: { url: 'https://cdn.discordapp.com/safe.png' }
+            }]
+        }]);
+        assert.equal(resolvedSafe[0].content[0].image_url.url, 'data:image/png;base64,YWJj');
+        assert.equal(fetchCalled, true);
+    } finally {
+        global.fetch = originalFetch;
+    }
+});
+
+test('Image download - blocks non-Discord hosts even when they resolve to a public IP (host allowlist)', async () => {
+    // The DNS mock resolves unknown hosts to 8.8.8.8, so this URL passes the
+    // private-IP guard. Only the host allowlist should stop it — this test
+    // guards against the allowlist being removed and leaving the (weaker,
+    // DNS-rebinding-prone) IP check as the sole defense.
+    const originalFetch = global.fetch;
+    let fetchCalled = false;
+    global.fetch = async () => {
+        fetchCalled = true;
+        return {
+            ok: true,
+            headers: { get: () => null },
+            arrayBuffer: async () => Buffer.from('abc')
+        };
+    };
+
+    try {
+        const resolved = await resolveImageUrlsToBase64([{
+            role: 'user',
+            content: [{
+                type: 'image_url',
+                image_url: { url: 'https://evil.example.com/steal.png' }
+            }]
+        }]);
+        // Left unresolved (raw URL passed through), and never fetched.
+        assert.equal(resolved[0].content[0].image_url.url, 'https://evil.example.com/steal.png');
+        assert.equal(fetchCalled, false);
+    } finally {
+        global.fetch = originalFetch;
+    }
+});
+
+test('Image download - blocks files exceeding 10MB size limit', async () => {
+    const originalFetch = global.fetch;
+    
+    try {
+        // 1. Exceeds limit via Content-Length header
+        global.fetch = async () => ({
+            ok: true,
+            headers: {
+                get: (name) => name.toLowerCase() === 'content-length' ? String(11 * 1024 * 1024) : null
+            },
+            arrayBuffer: async () => Buffer.from('abc')
+        });
+        
+        const resolvedLargeHeader = await resolveImageUrlsToBase64([{
+            role: 'user',
+            content: [{
+                type: 'image_url',
+                image_url: { url: 'https://cdn.discordapp.com/large.png' }
+            }]
+        }]);
+        assert.equal(resolvedLargeHeader[0].content[0].image_url.url, 'https://cdn.discordapp.com/large.png');
+
+        // 2. Exceeds limit via actual body chunk streaming
+        global.fetch = async () => ({
+            ok: true,
+            headers: { get: () => null },
+            body: {
+                getReader: () => {
+                    let sent = false;
+                    return {
+                        read: async () => {
+                            if (sent) return { done: true };
+                            sent = true;
+                            return { done: false, value: Buffer.alloc(11 * 1024 * 1024) };
+                        },
+                        cancel: async () => {},
+                        releaseLock: () => {}
+                    };
+                }
+            }
+        });
+
+        const resolvedLargeStream = await resolveImageUrlsToBase64([{
+            role: 'user',
+            content: [{
+                type: 'image_url',
+                image_url: { url: 'https://cdn.discordapp.com/large-stream.png' }
+            }]
+        }]);
+        assert.equal(resolvedLargeStream[0].content[0].image_url.url, 'https://cdn.discordapp.com/large-stream.png');
+    } finally {
+        global.fetch = originalFetch;
+    }
+});
+
+test('Image download - handles fetch timeout safely', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = async (url, options) => {
+        if (options && options.signal) {
+            const err = new Error('The operation was aborted.');
+            err.name = 'AbortError';
+            throw err;
+        }
+        return { ok: true, arrayBuffer: async () => Buffer.alloc(0) };
+    };
+
+    try {
+        const resolved = await resolveImageUrlsToBase64([{
+            role: 'user',
+            content: [{
+                type: 'image_url',
+                image_url: { url: 'https://cdn.discordapp.com/timeout.png' }
+            }]
+        }]);
+        assert.equal(resolved[0].content[0].image_url.url, 'https://cdn.discordapp.com/timeout.png');
+    } finally {
+        global.fetch = originalFetch;
+    }
+});
+
+test('Image download - blocks non-Discord hosts from fetching (SSRF mitigation)', async () => {
+    const originalFetch = global.fetch;
+    let fetchCalled = false;
+    global.fetch = async () => {
+        fetchCalled = true;
+        return { ok: true, arrayBuffer: async () => Buffer.from('abc') };
+    };
+
+    try {
+        const resolvedNonDiscord = await resolveImageUrlsToBase64([{
+            role: 'user',
+            content: [{
+                type: 'image_url',
+                image_url: { url: 'http://example.com/safe.png' }
+            }]
+        }]);
+        // Asserts that the URL was returned unresolved and no fetch was performed
+        assert.equal(resolvedNonDiscord[0].content[0].image_url.url, 'http://example.com/safe.png');
+        assert.equal(fetchCalled, false);
+    } finally {
+        global.fetch = originalFetch;
+    }
+});
+

@@ -577,7 +577,7 @@ test('test_t4_full_conversation_flow - runs multi-turn conversation verifying fl
         openWebUI,
         mentions,
         attachments: [
-            { contentType: 'image/png', url: 'https://example.com/user_img.png' }
+            { contentType: 'image/png', url: 'https://cdn.discordapp.com/user_img.png' }
         ]
     });
     await mention.execute(msg3);
@@ -601,9 +601,9 @@ test('test_t4_complex_merge_flow - verifies adjacent messages of same role merge
     memory.set('ch-1', [
         { role: 'user', content: 'text 1' },
         { role: 'user', content: [
-            { type: 'image_url', image_url: { url: 'https://example.com/pic1.png' } }
+            { type: 'image_url', image_url: { url: 'https://cdn.discordapp.com/pic1.png' } }
         ] },
-        { role: 'user', content: 'text 2 with https://example.com/pic2.png' }
+        { role: 'user', content: 'text 2 with https://cdn.discordapp.com/pic2.png' }
     ]);
     
     let capturedPayload = null;

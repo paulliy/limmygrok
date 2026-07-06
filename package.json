@@ -5,7 +5,7 @@
     "openai": "^6.45.0"
   },
   "name": "limmygrok",
-  "module": "index.ts",
+  "module": "index.js",
   "scripts": {
     "test": "bun test",
     "dashboard": "bun run dashboard/server.js"

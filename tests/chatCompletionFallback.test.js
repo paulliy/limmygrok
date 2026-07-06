@@ -1,19 +1,25 @@
 const { test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const dns = require('dns');
 
 const { createChatCompletionWithFallback, resolveImageUrlsToBase64 } = require('../utils/parseimgs');
 
 const realConsoleLog = console.log;
 const realConsoleError = console.error;
+const realLookup = dns.promises.lookup;
 
 beforeEach(() => {
     console.log = () => {};
     console.error = () => {};
+    dns.promises.lookup = async (hostname) => {
+        return [{ address: '8.8.8.8', family: 4 }];
+    };
 });
 
 afterEach(() => {
     console.log = realConsoleLog;
     console.error = realConsoleError;
+    dns.promises.lookup = realLookup;
 });
 
 test('falls back to non-streaming chat completion when streaming is rejected', async () => {

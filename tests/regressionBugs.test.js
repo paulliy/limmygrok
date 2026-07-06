@@ -189,3 +189,49 @@ test('regression: mention dedup must not drop an unrelated prior message that me
     assert.equal(userTurns.length, 2,
         'the unrelated prior message should be preserved and the new one appended, not overwritten');
 });
+
+test('regression: prepend display name to user message if text is non-empty', () => {
+    const { parseimgs } = require('../utils/parseimgs');
+    const msg = {
+        role: 'user',
+        author: { bot: false, displayName: 'Alice', username: 'alice_user' },
+        content: 'hello world',
+        attachments: []
+    };
+    const parsed = parseimgs(msg);
+    assert.equal(parsed.length, 1);
+    assert.equal(parsed[0].content, 'Alice: hello world');
+});
+
+test('regression: do not prepend display name to user message if text is empty (image only)', () => {
+    const { parseimgs } = require('../utils/parseimgs');
+    const msg = {
+        role: 'user',
+        author: { bot: false, displayName: 'Alice', username: 'alice_user' },
+        content: '',
+        attachments: [{ contentType: 'image/png', url: 'https://cdn.discordapp.com/photo.png' }]
+    };
+    const parsed = parseimgs(msg);
+    assert.equal(parsed.length, 1);
+    assert.equal(parsed[0].content[0].type, 'image_url');
+    assert.equal(parsed[0].content[0].image_url.url, 'https://cdn.discordapp.com/photo.png');
+});
+
+test('regression: stats.js prepares insert statement only once per database instance', () => {
+    const stats = require('../utils/stats');
+    let prepareCount = 0;
+    const mockDb = {
+        prepare: (query) => {
+            prepareCount++;
+            return {
+                run: () => {}
+            };
+        }
+    };
+    const mockClient = { db: mockDb };
+
+    stats.recordEvent(mockClient, 'test', { name: 'test_event' });
+    stats.recordEvent(mockClient, 'test', { name: 'test_event' });
+
+    assert.equal(prepareCount, 1, 'The SQL statement should only be prepared once');
+});

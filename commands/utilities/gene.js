@@ -1,6 +1,7 @@
 const { SlashCommandBuilder } = require('discord.js');
 const {MODEL_NAME} = require('../../config.json');
 const { safeError, createChatCompletionWithFallback } = require('../../utils/parseimgs');
+const { createStreamAnimator, stripThinkAndCitations, truncateForDiscord } = require('../../utils/streamingReply');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -14,6 +15,7 @@ module.exports = {
         await interaction.deferReply();
         const userInput = interaction.options.getString('input');
         const openWebUI = interaction.client.openWebUI;
+        let animator;
 
         try {
             const completion = await createChatCompletionWithFallback(openWebUI, {
@@ -27,70 +29,44 @@ module.exports = {
                 timeout: 120_000,
             });
 
-            let content = '';
-            let lastDisplayedContent = '';
-            let isEditing = false;
-            let isFinished = false;
-
             // Decoupled editing interval prevents Discord rate limits from blocking the stream
-            const editInterval = setInterval(async () => {
-                if (isFinished || isEditing) return;
-                
-                const displayContent = content
-                    .replace(/<think>(?:[\s\S]*?<\/think>|[\s\S]*$)/gi, '')
-                    .replace(/\[\d+\]/g, '')
-                    .trim();
-
-                const safeContent = displayContent || '*Thinking...*';
-                const chunkToSend = safeContent.slice(0, 2000);
-
-                if (chunkToSend !== lastDisplayedContent) {
-                    isEditing = true;
-                    try {
-                        await interaction.editReply(chunkToSend);
-                        lastDisplayedContent = chunkToSend;
-                    } catch (error) {
-                        safeError('Edit error:', error);
-                    } finally {
-                        isEditing = false;
-                    }
-                }
-            }, 1500);
+            animator = createStreamAnimator({
+                edit: (chunk) => interaction.editReply(chunk),
+                usePhrases: false,
+            });
 
             if (completion.isStream) {
                 // Read the stream as fast as it arrives without awaiting Discord
                 for await (const chunk of completion.stream) {
                     const deltaContent = chunk.choices?.[0]?.delta?.content;
                     if (deltaContent) {
-                        content += deltaContent;
+                        animator.append(deltaContent);
                     }
                 }
             } else {
-                content = completion.response?.choices?.[0]?.message?.content || '';
+                animator.append(completion.response?.choices?.[0]?.message?.content || '');
             }
 
-            isFinished = true;
-            clearInterval(editInterval);
-
-            const finalContent = content
-                .replace(/<think>[\s\S]*?<\/think>/gi, '')
-                .replace(/\[\d+\]/g, '')
-                .trim();
+            const finalContent = stripThinkAndCitations(animator.content);
+            animator.finish();
 
             if (!finalContent) {
                 await interaction.editReply('The model only returned thinking content with no final response.');
                 return;
             }
 
-            if (finalContent.length > 2000) {
-                await interaction.editReply(finalContent.slice(0, 1997) + '...');
-            } else {
-                await interaction.editReply(finalContent);
-            }
+            await interaction.editReply(truncateForDiscord(finalContent));
 
         } catch (error) {
+            if (animator) {
+                animator.finish();
+            }
             safeError('OpenWebUI Error:', error);
             await interaction.editReply(`Error: ${error.message ?? 'Something went wrong.'}`).catch(() => {});
+        } finally {
+            if (animator) {
+                animator.finish();
+            }
         }
     },
 };

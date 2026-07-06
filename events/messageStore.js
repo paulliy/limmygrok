@@ -16,7 +16,10 @@ module.exports = {
         // it stores the (mention-stripped) user turn and generates the reply.
         // Skipping here avoids double-storing the same message regardless of the
         // order these two MessageCreate listeners run in.
-        if (message.mentions?.has?.(message.client.user)) return;
+        const isMentioned = message.mentions?.users
+            ? message.mentions.users.has(message.client.user.id)
+            : message.mentions?.has?.(message.client.user, { ignoreEveryone: true, ignoreRoles: true });
+        if (isMentioned) return;
 
         const channelId = message.channel.id;
 

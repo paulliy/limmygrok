@@ -33,6 +33,16 @@ class MockSlashCommandBuilder {
         return this;
     }
 
+    setDefaultMemberPermissions(perms) {
+        this.defaultMemberPermissions = perms;
+        return this;
+    }
+
+    setDMPermission(dm) {
+        this.dmPermission = dm;
+        return this;
+    }
+
     addIntegerOption(configure) {
         const option = new MockOptionBuilder('integer');
         configure(option);
@@ -100,6 +110,9 @@ require.cache[require.resolve('discord.js')] = {
         MessageFlags: {
             Ephemeral: 64,
         },
+        PermissionFlagsBits: {
+            ManageGuild: 32n,
+        },
         SlashCommandBuilder: MockSlashCommandBuilder,
     }
 };
@@ -139,6 +152,8 @@ function createInteraction({
     getInteger = () => 10,
     replied = false,
     deferred = false,
+    inGuild = true,
+    hasManageGuild = true,
 } = {}) {
     const commands = new MockCollection();
     if (command) {
@@ -161,6 +176,10 @@ function createInteraction({
             getInteger,
         },
         isChatInputCommand: () => isChatInputCommand,
+        inGuild: () => inGuild,
+        memberPermissions: {
+            has: (permission) => hasManageGuild
+        },
         reply: mockFn(),
         followUp: mockFn(),
     };
