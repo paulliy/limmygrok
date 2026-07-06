@@ -1,5 +1,6 @@
 const { SlashCommandBuilder } = require('discord.js');
 const {MODEL_NAME} = require('../../config.json');
+const { safeError, createChatCompletionWithFallback } = require('../../utils/parseimgs');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -15,7 +16,7 @@ module.exports = {
         const openWebUI = interaction.client.openWebUI;
 
         try {
-            const stream = await openWebUI.chat.completions.create({
+            const completion = await createChatCompletionWithFallback(openWebUI, {
                 model: MODEL_NAME,
                 messages: [
                     { role: 'user', content: userInput }
@@ -49,19 +50,23 @@ module.exports = {
                         await interaction.editReply(chunkToSend);
                         lastDisplayedContent = chunkToSend;
                     } catch (error) {
-                        console.error('Edit error:', error);
+                        safeError('Edit error:', error);
                     } finally {
                         isEditing = false;
                     }
                 }
             }, 1500);
 
-            // Read the stream as fast as it arrives without awaiting Discord
-            for await (const chunk of stream) {
-                const deltaContent = chunk.choices?.[0]?.delta?.content;
-                if (deltaContent) {
-                    content += deltaContent;
+            if (completion.isStream) {
+                // Read the stream as fast as it arrives without awaiting Discord
+                for await (const chunk of completion.stream) {
+                    const deltaContent = chunk.choices?.[0]?.delta?.content;
+                    if (deltaContent) {
+                        content += deltaContent;
+                    }
                 }
+            } else {
+                content = completion.response?.choices?.[0]?.message?.content || '';
             }
 
             isFinished = true;
@@ -84,7 +89,7 @@ module.exports = {
             }
 
         } catch (error) {
-            console.error('OpenWebUI Error:', error);
+            safeError('OpenWebUI Error:', error);
             await interaction.editReply(`Error: ${error.message ?? 'Something went wrong.'}`).catch(() => {});
         }
     },

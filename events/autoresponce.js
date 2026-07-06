@@ -1,5 +1,6 @@
 const { MODEL_NAME } = require('../config.json');
-const { parseimgs, resolveImageUrlsToBase64, safeLog, safeError } = require('../utils/parseimgs');
+const { parseimgs, resolveImageUrlsToBase64, safeLog, safeError, createChatCompletionWithFallback } = require('../utils/parseimgs');
+const { recordEvent } = require('../utils/stats');
 
 
 
@@ -17,7 +18,13 @@ async function generateAutoresponce(message) {
     await message.channel.sendTyping();
 
     const openWebUI = message.client.openWebUI;
-    let replyMessage = await message.reply('*Thinking.*');
+    let replyMessage;
+    try {
+        replyMessage = await message.reply('*Thinking.*');
+    } catch (error) {
+        safeError('Failed to send initial auto-response reply:', error);
+        return;
+    }
 
     const loadingPhrases = [
         'Thinking', 'Pondering', 'Questing', 'Holding site',
@@ -100,14 +107,18 @@ async function generateAutoresponce(message) {
 
         safeLog(`\n[DEBUG] API Payload:`, JSON.stringify(apiPayload, null, 2));
 
-        const stream = await openWebUI.chat.completions.create(apiPayload);
+        const completion = await createChatCompletionWithFallback(openWebUI, apiPayload);
 
-        for await (const chunk of stream) {
-            const deltaContent = chunk.choices?.[0]?.delta?.content;
-            if (deltaContent) {
-                content += deltaContent;
-                process.stdout.write(deltaContent);
+        if (completion.isStream) {
+            for await (const chunk of completion.stream) {
+                const deltaContent = chunk.choices?.[0]?.delta?.content;
+                if (deltaContent) {
+                    content += deltaContent;
+                    process.stdout.write(deltaContent);
+                }
             }
+        } else {
+            content = completion.response?.choices?.[0]?.message?.content || '';
         }
 
         isFinished = true;
@@ -119,7 +130,7 @@ async function generateAutoresponce(message) {
             .trim();
 
         const truncatedFinalContent = finalContent.length > 2000
-            ? finalContent.slice(0, 1997) + '/...'
+            ? finalContent.slice(0, 1997) + '...'
             : finalContent;
 
         if (!finalContent) {
@@ -128,6 +139,11 @@ async function generateAutoresponce(message) {
         }
 
         await replyMessage.edit(truncatedFinalContent);
+
+        recordEvent(message.client, 'autoresponse', {
+            guildId: message.guildId,
+            channelId: message.channel.id,
+        });
 
         // Add the bot's final response to the memory
         let currentMemory = message.client.memory.get(message.channel.id) || [];

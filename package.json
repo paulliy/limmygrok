@@ -6,6 +6,10 @@
   },
   "name": "limmygrok",
   "module": "index.ts",
+  "scripts": {
+    "test": "bun test",
+    "dashboard": "bun run dashboard/server.js"
+  },
   "private": true,
   "devDependencies": {
     "@types/bun": "latest",

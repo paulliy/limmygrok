@@ -3,6 +3,8 @@ const { Client, Events, GatewayIntentBits, Collection, MessageFlags} = require('
 const { token, APIkey, API_BASE_URL } = require('./config.json');
 const fs = require('node:fs');
 const path = require('node:path');
+const { safeLog, safeError } = require('./utils/parseimgs');
+const { openDatabase, PersistentMap } = require('./utils/db');
 // Create a new client instance
 const client = new Client({
     intents: [
@@ -20,9 +22,19 @@ const {OpenAI} = require('openai');
 // The distinction between `client: Client` and `readyClient: Client<true>` is important for TypeScript developers.
 // It makes some properties non-nullable.
 client.commands = new Collection();
-client.memory = new Collection();
-client.messageCounts = new Collection();
-client.autoResponseRates = new Map();
+
+// SQLite-backed state: conversation memory, per-channel message counts, and
+// auto-response rate settings all survive restarts. PersistentMap has the same
+// get/set interface as the Collections/Maps it replaces.
+const db = openDatabase(path.join(__dirname, 'data.sqlite'));
+client.db = db;
+client.memory = new PersistentMap(db, 'memory');
+client.messageCounts = new PersistentMap(db, 'messageCounts');
+client.autoResponseRates = new PersistentMap(db, 'autoResponseRates');
+// Opt-in allowlist of channels where ambient auto-responses are active.
+// channelId -> guildId. Empty = the bot auto-responds nowhere until an admin
+// runs /channels add. (Direct @mentions are never gated by this.)
+client.allowedChannels = new PersistentMap(db, 'allowedChannels');
 
 const openWebUI = new OpenAI({
   apiKey: APIkey,
@@ -41,7 +53,7 @@ for (const folder of commandFolders) {
 		if ('data' in command && 'execute' in command) {
 			client.commands.set(command.data.name, command);
 		} else {
-			console.log(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
+			safeLog(`[WARNING] The command at ${filePath} is missing a required "data" or "execute" property.`);
 		}
 	}
 }
@@ -52,6 +64,17 @@ const eventFiles = fs.readdirSync(eventsPath).filter((file) => file.endsWith('.j
 for (const file of eventFiles) {
 	const filePath = path.join(eventsPath, file);
 	const event = require(filePath);
+	const hasName = Boolean(event.name);
+	const hasExecute = typeof event.execute === 'function';
+	if (!hasName && !hasExecute) {
+		// Shared helper module that happens to live in events/ (e.g. autoResponseState),
+		// not an event handler. Skip silently.
+		continue;
+	}
+	if (!hasName || !hasExecute) {
+		safeLog(`[WARNING] The event at ${filePath} is missing a required "name" or "execute" property.`);
+		continue;
+	}
 	if (event.once) {
 		client.once(event.name, (...args) => event.execute(...args));
 	} else {
@@ -60,6 +83,51 @@ for (const file of eventFiles) {
 }
 
 client.cooldowns = new Collection();
+
+// --- Crash guards & graceful shutdown ---------------------------------------
+
+let isShuttingDown = false;
+
+// Cleanly tear down the gateway connection and flush/close SQLite, then exit.
+// Idempotent so overlapping signals (or a signal during an uncaught exception)
+// only run the cleanup once. Every step is isolated so one failure can't block
+// the rest.
+async function shutdown(signal, code = 0) {
+	if (isShuttingDown) return;
+	isShuttingDown = true;
+	safeLog(`\n[SHUTDOWN] Received ${signal}, cleaning up...`);
+
+	try {
+		await client.destroy();
+	} catch (error) {
+		safeError('[SHUTDOWN] Error destroying Discord client:', error);
+	}
+
+	try {
+		// Fold the WAL back into the main db file so the on-disk state is tidy.
+		db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+		db.close();
+	} catch (error) {
+		safeError('[SHUTDOWN] Error closing database:', error);
+	}
+
+	process.exit(code);
+}
+
+// Keep the bot alive on a stray rejection; just surface it (scrubbed).
+process.on('unhandledRejection', (reason) => {
+	safeError('[FATAL] Unhandled promise rejection:', reason);
+});
+
+// After an uncaught exception the process state is unreliable, so log, clean
+// up, and exit non-zero for a supervisor to restart.
+process.on('uncaughtException', (error) => {
+	safeError('[FATAL] Uncaught exception:', error);
+	shutdown('uncaughtException', 1);
+});
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 // Log in to Discord with your client's token
 client.login(token);

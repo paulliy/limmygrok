@@ -9,6 +9,13 @@ try {
 }
 
 const URL_REGEX = /https?:\/\/[^\s]+/gi;
+const IMAGE_MIME_TYPES_BY_EXTENSION = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+};
 
 function isImageUrl(url) {
     try {
@@ -28,10 +35,6 @@ async function downloadImageAsBase64(url) {
     try {
         if (!url) return null;
         if (url.startsWith('data:')) {
-            const commaIndex = url.indexOf(',');
-            if (commaIndex !== -1) {
-                return url.substring(commaIndex + 1);
-            }
             return url;
         }
         if (!url.startsWith('http://') && !url.startsWith('https://')) {
@@ -40,15 +43,39 @@ async function downloadImageAsBase64(url) {
 
         const response = await fetch(url);
         if (!response.ok) {
-            console.error(`Failed to download image: ${response.status} ${response.statusText} from ${url}`);
+            safeError(`Failed to download image: ${response.status} ${response.statusText} from ${url}`);
             return url; // Fallback to original URL
         }
         const arrayBuffer = await response.arrayBuffer();
-        return Buffer.from(arrayBuffer).toString('base64');
+        const contentType = getImageMimeType(url, response.headers?.get?.('content-type'));
+        return `data:${contentType};base64,${Buffer.from(arrayBuffer).toString('base64')}`;
     } catch (e) {
-        console.error(`Error downloading image from ${url}:`, e);
+        safeError(`Error downloading image from ${url}:`, e);
         return url; // Fallback to original URL
     }
+}
+
+function getImageMimeType(url, contentType) {
+    const normalizedContentType = typeof contentType === 'string'
+        ? contentType.split(';')[0].trim().toLowerCase()
+        : '';
+
+    if (normalizedContentType.startsWith('image/')) {
+        return normalizedContentType;
+    }
+
+    try {
+        const pathname = new URL(url).pathname.toLowerCase();
+        for (const [extension, mimeType] of Object.entries(IMAGE_MIME_TYPES_BY_EXTENSION)) {
+            if (pathname.endsWith(extension)) {
+                return mimeType;
+            }
+        }
+    } catch (e) {
+        // Use the default below when the URL cannot be parsed.
+    }
+
+    return 'image/png';
 }
 
 async function resolveImageUrlsToBase64(messages) {
@@ -64,11 +91,11 @@ async function resolveImageUrlsToBase64(messages) {
             const newContent = [];
             for (const part of newMsg.content) {
                 if (part && part.type === 'image_url' && part.image_url && part.image_url.url) {
-                    const base64 = await downloadImageAsBase64(part.image_url.url);
+                    const resolvedUrl = await downloadImageAsBase64(part.image_url.url);
                     newContent.push({
                         type: 'image_url',
                         image_url: {
-                            url: base64 || part.image_url.url
+                            url: resolvedUrl || part.image_url.url
                         }
                     });
                 } else {
@@ -91,7 +118,9 @@ function parseTextAndImages(text, attachments) {
     for (const url of matches) {
         if (isImageUrl(url)) {
             imageUrls.push(url);
-            cleanedText = cleanedText.replace(url, '');
+            // split/join removes every occurrence (String.replace with a string
+            // argument only removes the first) and treats the URL literally.
+            cleanedText = cleanedText.split(url).join('');
         }
     }
     
@@ -271,6 +300,39 @@ function safeError(...args) {
     console.error(...scrubbedArgs);
 }
 
+async function createChatCompletionWithFallback(openWebUI, payload, requestOptions) {
+    if (!openWebUI?.chat?.completions?.create) {
+        throw new Error('OpenWebUI client is not configured.');
+    }
+
+    try {
+        const stream = await openWebUI.chat.completions.create({ ...payload, stream: true }, requestOptions);
+        return { isStream: true, stream, content: '' };
+    } catch (error) {
+        const statusCode = error?.status || error?.statusCode || error?.response?.status;
+        const message = typeof error?.message === 'string' ? error.message : '';
+        const isStreamingProblem = /stream|no body|unsupported/i.test(message);
+        const shouldFallback = payload?.stream !== false && (
+            statusCode === 404 ||
+            statusCode === 405 ||
+            isStreamingProblem
+        );
+
+        if (!shouldFallback) {
+            throw error;
+        }
+
+        safeLog('\n[DEBUG] Streaming chat request failed, retrying without streaming.', error);
+        const fallbackPayload = { ...payload, stream: false };
+        const response = await openWebUI.chat.completions.create(fallbackPayload, requestOptions);
+        return {
+            isStream: false,
+            response,
+            content: response?.choices?.[0]?.message?.content || ''
+        };
+    }
+}
+
 module.exports = {
     isImageUrl,
     parseTextAndImages,
@@ -279,5 +341,6 @@ module.exports = {
     parseimgs,
     resolveImageUrlsToBase64,
     safeLog,
-    safeError
+    safeError,
+    createChatCompletionWithFallback
 };

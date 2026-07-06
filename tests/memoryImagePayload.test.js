@@ -1,6 +1,32 @@
-const test = require('node:test');
+const { test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { mock } = require('node:test');
+
+const realConsoleLog = console.log;
+const realConsoleError = console.error;
+const realStdoutWrite = process.stdout.write;
+const realFetch = global.fetch;
+const MOCK_IMAGE_DATA_URL = 'data:image/png;base64,aW1hZ2U=';
+
+beforeEach(() => {
+    console.log = () => {};
+    console.error = () => {};
+    process.stdout.write = () => true;
+    global.fetch = async () => ({
+        ok: true,
+        headers: {
+            get: (name) => name.toLowerCase() === 'content-type' ? 'image/png' : null,
+        },
+        arrayBuffer: async () => Buffer.from('image'),
+    });
+});
+
+afterEach(() => {
+    console.log = realConsoleLog;
+    console.error = realConsoleError;
+    process.stdout.write = realStdoutWrite;
+    global.fetch = realFetch;
+});
 
 // --- Mocking Discord.js ---
 const mockDiscord = {
@@ -68,6 +94,8 @@ function createMockMessage({
             messageCounts,
             cooldowns,
             openWebUI,
+            // Allow this channel so messageStore's ambient path runs in tests.
+            allowedChannels: new Map([[channelId, 'guild-test']]),
             user: { id: 'bot-123', username: 'limmybot' }
         },
         attachments: new Map(attachments.map((att, i) => [`att-${i}`, att])),
@@ -559,7 +587,7 @@ test('test_t4_full_conversation_flow - runs multi-turn conversation verifying fl
     assert.equal(lastSentMessage.role, 'user');
     assert.deepEqual(lastSentMessage.content, [
         { type: 'text', text: 'what is this?' },
-        { type: 'image_url', image_url: { url: 'https://example.com/user_img.png' } }
+        { type: 'image_url', image_url: { url: MOCK_IMAGE_DATA_URL } }
     ]);
     
     history = memory.get('ch-1');
@@ -597,9 +625,9 @@ test('test_t4_complex_merge_flow - verifies adjacent messages of same role merge
     
     assert.deepEqual(userMessages[0].content, [
         { type: 'text', text: 'text 1' },
-        { type: 'image_url', image_url: { url: 'https://example.com/pic1.png' } },
+        { type: 'image_url', image_url: { url: MOCK_IMAGE_DATA_URL } },
         { type: 'text', text: 'text 2 with ' },
-        { type: 'image_url', image_url: { url: 'https://example.com/pic2.png' } }
+        { type: 'image_url', image_url: { url: MOCK_IMAGE_DATA_URL } }
     ]);
 });
 
@@ -625,6 +653,7 @@ test('test_t5_typing_indicator_leak_on_reply_failure - clears typing interval ev
 
     const originalClearInterval = global.clearInterval;
     const originalSetInterval = global.setInterval;
+    const originalError = console.error;
     
     let intervalId = null;
     let clearedId = null;
@@ -639,6 +668,7 @@ test('test_t5_typing_indicator_leak_on_reply_failure - clears typing interval ev
         clearedId = id;
         originalClearInterval(id);
     };
+    console.error = () => {};
 
     try {
         await mention.execute(message);
@@ -647,6 +677,7 @@ test('test_t5_typing_indicator_leak_on_reply_failure - clears typing interval ev
     } finally {
         global.clearInterval = originalClearInterval;
         global.setInterval = originalSetInterval;
+        console.error = originalError;
     }
 
     assert.ok(intervalId, 'typingInterval should have been started');
@@ -692,4 +723,3 @@ test('test_t5_duplicate_check_with_image_in_history - replaces last history mess
     const userMessages = history.filter(m => m.role === 'user');
     assert.equal(userMessages.length, 1, 'Should only have 1 user message in history (the replaced one)');
 });
-

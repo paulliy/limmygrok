@@ -1,5 +1,21 @@
-const test = require('node:test');
+const { test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+
+const realConsoleLog = console.log;
+const realConsoleError = console.error;
+const realStdoutWrite = process.stdout.write;
+
+beforeEach(() => {
+    console.log = () => {};
+    console.error = () => {};
+    process.stdout.write = () => true;
+});
+
+afterEach(() => {
+    console.log = realConsoleLog;
+    console.error = realConsoleError;
+    process.stdout.write = realStdoutWrite;
+});
 
 // --- Mocking Discord.js ---
 const mockDiscord = {
@@ -62,6 +78,8 @@ function createMockMessage({
             messageCounts,
             cooldowns,
             openWebUI,
+            // Allow this channel so messageStore's ambient path runs in tests.
+            allowedChannels: new Map([[channelId, 'guild-test']]),
             user: { id: 'bot-123', username: 'limmybot' }
         },
         attachments: new Map(attachments.map((att, i) => [`att-${i}`, att])),

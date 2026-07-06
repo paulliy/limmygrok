@@ -1,0 +1,24 @@
+# No Dockerfile exists yet, but this is here so that if one is added later,
+# these never end up in an image build context.
+
+node_modules
+.git
+.vscode
+.idea
+
+# secrets / local config
+config.json
+.env
+.env.*
+
+# persistent bot state (SQLite)
+data.sqlite
+data.sqlite-wal
+data.sqlite-shm
+
+# local-only usage/settings dashboard (dev convenience, not part of the deployed bot)
+dashboard
+
+# tests, docs
+tests
+*.md

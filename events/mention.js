@@ -1,6 +1,7 @@
 const { Events, Collection } = require('discord.js');
 const {MODEL_NAME} = require('../config.json');
-const { parseimgs, resolveImageUrlsToBase64, safeLog, safeError } = require('../utils/parseimgs');
+const { parseimgs, resolveImageUrlsToBase64, safeLog, safeError, createChatCompletionWithFallback } = require('../utils/parseimgs');
+const { recordEvent } = require('../utils/stats');
 
 module.exports = {
     name: Events.MessageCreate,
@@ -81,7 +82,11 @@ module.exports = {
                                 lastContentStr = textPart.text;
                             }
                         }
-                        if (lastContentStr === message.content || lastContentStr.includes(message.client.user.id)) {
+                        // Only dedup when the last stored entry is genuinely THIS
+                        // same turn (exact raw content). Matching on a bare bot-id
+                        // substring would wrongly overwrite an unrelated prior
+                        // message that merely happens to contain the id.
+                        if (lastContentStr === message.content) {
                             history[history.length - 1] = userMessage;
                             replaced = true;
                         }
@@ -170,14 +175,18 @@ module.exports = {
                 safeLog(`\n[DEBUG] API Payload:`, JSON.stringify(apiPayload, null, 2));
 
                 // 2. Now await the API (the animation is already running in the background)
-                const stream = await openWebUI.chat.completions.create(apiPayload);
+                const completion = await createChatCompletionWithFallback(openWebUI, apiPayload);
 
-                for await (const chunk of stream) {
-                    const deltaContent = chunk.choices?.[0]?.delta?.content;
-                    if (deltaContent) {
-                        content += deltaContent;
-                        process.stdout.write(deltaContent);
+                if (completion.isStream) {
+                    for await (const chunk of completion.stream) {
+                        const deltaContent = chunk.choices?.[0]?.delta?.content;
+                        if (deltaContent) {
+                            content += deltaContent;
+                            process.stdout.write(deltaContent);
+                        }
                     }
+                } else {
+                    content = completion.response?.choices?.[0]?.message?.content || '';
                 }
 
                 isFinished = true;
@@ -189,7 +198,7 @@ module.exports = {
                     .trim();
 
                 const truncatedFinalContent = finalContent.length > 2000
-                    ? finalContent.slice(0, 1997) + '/...'
+                    ? finalContent.slice(0, 1997) + '...'
                     : finalContent;
 
                 if (!finalContent) {
@@ -202,6 +211,12 @@ module.exports = {
                 if (replyMessage) {
                     await replyMessage.edit(truncatedFinalContent);
                 }
+
+                recordEvent(message.client, 'mention', {
+                    guildId: message.guildId,
+                    channelId: message.channel.id,
+                    userId: message.author.id,
+                });
 
                 // Add the bot's final response to the memory
                 let currentMemory = message.client.memory.get(message.channel.id) || [];

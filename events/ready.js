@@ -1,9 +1,10 @@
 const {Events} = require('discord.js');
+const { safeLog } = require('../utils/parseimgs');
 
 module.exports = {
 	name: Events.ClientReady,
 	once: true,
 	execute(client) {
-		console.log(`Ready! Logged in as ${client.user.tag}`);
+		safeLog(`Ready! Logged in as ${client.user.tag}`);
 	},
 };
