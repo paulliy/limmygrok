@@ -2,7 +2,7 @@ const { Events, Collection } = require('discord.js');
 const { resolveConfig } = require('../utils/config');
 const { parseimgs, resolveImageUrlsToBase64 } = require('../utils/parseimgs');
 const { safeLog, safeError, debugLog } = require('../utils/log');
-const { requestChatCompletion, describeLlmError } = require('../utils/llm');
+const { requestChatCompletion, describeLlmError, pickModel } = require('../utils/llm');
 const { buildReplyContext } = require('../utils/prompt');
 const { applyServerVoice, samplingParamsFor } = require('../utils/voice');
 const { recordMessage } = require('../utils/corpus');
@@ -70,7 +70,7 @@ module.exports = {
 
         const client = message.client;
         const llm = client.llm || client.openWebUI;
-        const modelName = client.config?.MODEL_NAME || fallbackConfig.MODEL_NAME;
+        const llmConfig = client.config || fallbackConfig;
 
         await message.channel.sendTyping();
         const typingInterval = setInterval(() => message.channel.sendTyping(), 8_000);
@@ -170,12 +170,16 @@ module.exports = {
 
             debugLog('[MENTION] system prompt:', systemPrompt);
 
+            const payloadMessages = [
+                { role: 'system', content: systemPrompt },
+                ...(await resolveImageUrlsToBase64(baseMessages)),
+            ];
+
             const apiPayload = {
-                model: modelName,
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    ...(await resolveImageUrlsToBase64(baseMessages)),
-                ],
+                // Text-only model for ordinary chat, vision model only when an
+                // image is actually attached.
+                model: pickModel(llmConfig, payloadMessages),
+                messages: payloadMessages,
                 stream: true,
                 ...samplingParamsFor(profile),
             };
@@ -244,7 +248,7 @@ module.exports = {
             if (animator) animator.finish();
             safeError('[MENTION] LLM error:', error);
             if (replyMessage) {
-                await replyMessage.edit(describeLlmError(error, client.config || fallbackConfig)).catch(() => {});
+                await replyMessage.edit(describeLlmError(error, llmConfig)).catch(() => {});
             }
         } finally {
             if (animator) animator.finish();

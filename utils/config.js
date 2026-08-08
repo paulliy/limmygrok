@@ -22,22 +22,26 @@ const path = require('node:path');
 const PROVIDER_PRESETS = {
     openrouter: {
         baseURL: 'https://openrouter.ai/api/v1',
-        // Multimodal on purpose: utils/parseimgs.js inlines posted images into
-        // the request, and a text-only default silently wastes that whole
-        // pipeline. This one accepts images and is cheap (cents per million
-        // input tokens). Model IDs churn — override with LLM_MODEL if this one
-        // is retired; a 404 from the provider names the model in the error.
-        model: 'qwen/qwen3.6-27b',
+        // A sparse MoE with 13B active parameters: fast and very cheap, which
+        // is what a bot writing one-line replies all day actually needs. It is
+        // text-only, hence the separate visionModel below.
+        model: 'deepseek/deepseek-v4-flash-0731',
+        // Used only for the requests that actually carry an image. Paying
+        // multimodal prices on every "who whiffed" is pure waste.
+        visionModel: 'qwen/qwen3.6-27b',
         label: 'OpenRouter',
     },
     groq: {
         baseURL: 'https://api.groq.com/openai/v1',
         model: 'llama-3.3-70b-versatile',
+        visionModel: 'meta-llama/llama-4-scout-17b-16e-instruct',
         label: 'Groq',
     },
     gemini: {
         baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
+        // Natively multimodal, so one model covers both cases.
         model: 'gemini-2.0-flash',
+        visionModel: 'gemini-2.0-flash',
         label: 'Google Gemini',
     },
     cerebras: {
@@ -48,6 +52,7 @@ const PROVIDER_PRESETS = {
     openai: {
         baseURL: 'https://api.openai.com/v1',
         model: 'gpt-4o-mini',
+        visionModel: 'gpt-4o-mini',
         label: 'OpenAI',
     },
     openwebui: {
@@ -70,6 +75,7 @@ const ENV_ALIASES = {
     APIkey: ['LLM_API_KEY', 'OPENROUTER_API_KEY', 'API_KEY', 'APIKEY'],
     API_BASE_URL: ['LLM_BASE_URL', 'API_BASE_URL'],
     MODEL_NAME: ['LLM_MODEL', 'MODEL_NAME'],
+    VISION_MODEL: ['LLM_VISION_MODEL', 'VISION_MODEL'],
     PROVIDER: ['LLM_PROVIDER', 'PROVIDER'],
     SYSTEM_PROMPT: ['SYSTEM_PROMPT'],
     APP_URL: ['APP_URL', 'OPENROUTER_SITE_URL'],
@@ -140,6 +146,7 @@ function resolveConfig({ env = process.env, fileConfig, configPath } = {}) {
     if (preset) {
         if (isBlank(resolved.API_BASE_URL) && preset.baseURL) resolved.API_BASE_URL = preset.baseURL;
         if (isBlank(resolved.MODEL_NAME) && preset.model) resolved.MODEL_NAME = preset.model;
+        if (isBlank(resolved.VISION_MODEL) && preset.visionModel) resolved.VISION_MODEL = preset.visionModel;
     }
 
     return resolved;

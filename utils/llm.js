@@ -37,6 +37,28 @@ function createLlmClient(config) {
     });
 }
 
+// True when any turn actually carries an image. Content is either a plain
+// string or an array of {type:'text'|'image_url'} parts (see
+// utils/parseimgs.js), so only the array form can hold one.
+function messagesContainImages(messages) {
+    if (!Array.isArray(messages)) return false;
+    return messages.some((message) =>
+        Array.isArray(message?.content) &&
+        message.content.some((part) => part?.type === 'image_url'));
+}
+
+// Picks the model for one request.
+//
+// The everyday model is chosen for speed and price, which for the cheapest
+// good options means text-only. Rather than paying multimodal rates on every
+// "who whiffed", the vision model is swapped in only for the requests that
+// actually contain an image. Providers whose main model is already multimodal
+// set both to the same ID, so this is a no-op for them.
+function pickModel(config, messages) {
+    if (!messagesContainImages(messages)) return config?.MODEL_NAME;
+    return config?.VISION_MODEL || config?.MODEL_NAME;
+}
+
 function statusOf(error) {
     return error?.status || error?.statusCode || error?.response?.status;
 }
@@ -82,7 +104,14 @@ function describeLlmError(error, config) {
         return 'The model provider says this account is out of credit.';
     }
     if (status === 404) {
-        return `Model \`${config?.MODEL_NAME ?? 'unknown'}\` was not found on this provider. Check MODEL_NAME.`;
+        // Two models are configured (text and vision), and the failing request
+        // could have used either, so name both rather than guessing.
+        const configured = [config?.MODEL_NAME, config?.VISION_MODEL]
+            .filter(Boolean)
+            .filter((name, index, all) => all.indexOf(name) === index)
+            .map((name) => `\`${name}\``)
+            .join(' or ');
+        return `Model not found on this provider (${configured || 'none configured'}). Check LLM_MODEL / LLM_VISION_MODEL — model IDs get retired.`;
     }
     if (typeof status === 'number' && status >= 500) {
         return 'The model provider is having a moment (5xx). Try again shortly.';
@@ -149,6 +178,8 @@ async function createChatCompletionWithFallback(client, payload, requestOptions)
 
 module.exports = {
     createLlmClient,
+    pickModel,
+    messagesContainImages,
     requestChatCompletion,
     createChatCompletionWithFallback,
     describeLlmError,

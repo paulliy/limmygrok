@@ -136,6 +136,19 @@ chat-completions, so switching providers is a base URL and a model name:
 Anything else OpenAI-compatible works too — set `LLM_BASE_URL` and `LLM_MODEL`
 directly.
 
+**Two models, routed per request.** The cheapest fast models are text-only, so
+the bot uses one for ordinary chat and automatically swaps to a vision model
+only for the requests that actually carry an image:
+
+| | Model | Cost |
+| --- | --- | --- |
+| Everyday chat | `deepseek/deepseek-v4-flash-0731` | $0.09/M in, $0.18/M out |
+| Messages with images | `qwen/qwen3.6-27b` | ~$0.29/M in |
+
+Override either with `LLM_MODEL` / `LLM_VISION_MODEL`. Providers whose main
+model is already multimodal (Gemini, OpenAI) set both to the same ID, making
+the routing a no-op.
+
 ## Commands
 
 | Command | What it does |
@@ -165,7 +178,7 @@ every log line (`utils/log.js`), and full payload logging is off unless you set
 ## Development
 
 ```bash
-bun test                          # 195 tests
+bun test                          # 201 tests
 bun test tests/corpusLearning.test.js
 bun run dashboard                 # local usage dashboard (dev only)
 ```

@@ -21,7 +21,7 @@ module.exports = {
         const userInput = interaction.options.getString('input');
         const client = interaction.client;
         const llm = client.llm || client.openWebUI;
-        const modelName = client.config?.MODEL_NAME || fallbackConfig.MODEL_NAME;
+        const llmConfig = client.config || fallbackConfig;
         let animator;
 
         try {
@@ -34,7 +34,8 @@ module.exports = {
             });
 
             const completion = await requestChatCompletion(llm, {
-                model: modelName,
+                // /generatestring takes text only, so never the vision model.
+                model: llmConfig.MODEL_NAME,
                 messages: [
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: userInput }
@@ -82,7 +83,7 @@ module.exports = {
                 animator.finish();
             }
             safeError('[GENE] LLM error:', error);
-            await interaction.editReply(describeLlmError(error, client.config || fallbackConfig)).catch(() => {});
+            await interaction.editReply(describeLlmError(error, llmConfig)).catch(() => {});
         } finally {
             if (animator) {
                 animator.finish();

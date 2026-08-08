@@ -166,3 +166,51 @@ test('an unconfigured client fails with a clear message', async () => {
     await assert.rejects(() => requestChatCompletion(null, {}), /not configured/i);
     await assert.rejects(() => requestChatCompletion({}, {}), /not configured/i);
 });
+
+// --- model routing -----------------------------------------------------------
+
+const { pickModel, messagesContainImages } = require('../utils/llm');
+
+const ROUTED = { MODEL_NAME: 'text-model', VISION_MODEL: 'vision-model' };
+const TEXT_TURN = { role: 'user', content: 'who whiffed' };
+const IMAGE_TURN = {
+    role: 'user',
+    content: [
+        { type: 'text', text: 'what is this' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,abc' } },
+    ],
+};
+
+test('image detection only fires on an actual image part', () => {
+    assert.equal(messagesContainImages([TEXT_TURN]), false);
+    assert.equal(messagesContainImages([TEXT_TURN, IMAGE_TURN]), true);
+    // A content array with no image part is still text.
+    assert.equal(messagesContainImages([{ role: 'user', content: [{ type: 'text', text: 'hi' }] }]), false);
+    assert.equal(messagesContainImages(null), false);
+    assert.equal(messagesContainImages([]), false);
+});
+
+test('ordinary chat uses the cheap text model', () => {
+    assert.equal(pickModel(ROUTED, [TEXT_TURN]), 'text-model');
+});
+
+test('a request carrying an image is routed to the vision model', () => {
+    assert.equal(pickModel(ROUTED, [TEXT_TURN, IMAGE_TURN]), 'vision-model');
+});
+
+test('without a vision model configured, images still go somewhere', () => {
+    assert.equal(pickModel({ MODEL_NAME: 'only-model' }, [IMAGE_TURN]), 'only-model');
+});
+
+test('the OpenRouter preset supplies both models', () => {
+    const config = resolveConfig({ env: {}, fileConfig: { token: 't', APIkey: 'k' } });
+    assert.equal(config.MODEL_NAME, PROVIDER_PRESETS.openrouter.model);
+    assert.equal(config.VISION_MODEL, PROVIDER_PRESETS.openrouter.visionModel);
+    assert.notEqual(config.MODEL_NAME, config.VISION_MODEL, 'the cheap default is text-only');
+});
+
+test('the vision model can be overridden independently', () => {
+    const config = resolveConfig({ env: { LLM_VISION_MODEL: 'my/vision' }, fileConfig: { token: 't', APIkey: 'k' } });
+    assert.equal(config.VISION_MODEL, 'my/vision');
+    assert.equal(config.MODEL_NAME, PROVIDER_PRESETS.openrouter.model, 'text model is untouched');
+});

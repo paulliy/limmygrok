@@ -1,7 +1,7 @@
 const { resolveConfig } = require('../utils/config');
 const { parseimgs, resolveImageUrlsToBase64 } = require('../utils/parseimgs');
 const { safeError, debugLog } = require('../utils/log');
-const { requestChatCompletion, describeLlmError } = require('../utils/llm');
+const { requestChatCompletion, describeLlmError, pickModel } = require('../utils/llm');
 const { buildReplyContext } = require('../utils/prompt');
 const { applyServerVoice, samplingParamsFor } = require('../utils/voice');
 const { pickGarnishGif } = require('../utils/media');
@@ -44,7 +44,7 @@ async function generateAutoresponce(message) {
     await message.channel.sendTyping();
 
     const llm = client.llm || client.openWebUI;
-    const modelName = client.config?.MODEL_NAME || fallbackConfig.MODEL_NAME;
+    const llmConfig = client.config || fallbackConfig;
 
     let replyMessage;
     try {
@@ -75,12 +75,16 @@ async function generateAutoresponce(message) {
 
         debugLog('[AUTORESPONSE] system prompt:', systemPrompt);
 
+        const payloadMessages = [
+            { role: 'system', content: systemPrompt },
+            ...(await resolveImageUrlsToBase64(processedMessages)),
+        ];
+
         const apiPayload = {
-            model: modelName,
-            messages: [
-                { role: 'system', content: systemPrompt },
-                ...(await resolveImageUrlsToBase64(processedMessages)),
-            ],
+            // Text-only model for ordinary chat, vision model only when an
+            // image is actually in the context.
+            model: pickModel(llmConfig, payloadMessages),
+            messages: payloadMessages,
             stream: true,
             ...samplingParamsFor(profile),
         };
@@ -139,7 +143,7 @@ async function generateAutoresponce(message) {
     } catch (error) {
         animator.finish();
         safeError('[AUTORESPONSE] LLM error:', error);
-        await replyMessage.edit(describeLlmError(error, client.config || fallbackConfig)).catch(() => {});
+        await replyMessage.edit(describeLlmError(error, llmConfig)).catch(() => {});
     } finally {
         animator.finish();
     }
