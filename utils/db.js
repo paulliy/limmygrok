@@ -12,6 +12,7 @@
 const { Database } = require('bun:sqlite');
 const { safeError } = require('./log');
 const { initCorpusSchema } = require('./corpus');
+const { initMediaSchema } = require('./media');
 
 function openDatabase(filePath) {
     const db = new Database(filePath, { create: true });
@@ -44,6 +45,8 @@ function openDatabase(filePath) {
     // The learned server corpus + its FTS index and cached dialect profiles.
     // Defined in utils/corpus.js so the learning layer owns its own schema.
     initCorpusSchema(db);
+    // The server's reusable GIFs/images, learned the same way.
+    initMediaSchema(db);
 
     return db;
 }

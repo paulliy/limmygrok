@@ -4,8 +4,9 @@ const { safeError, debugLog } = require('../utils/log');
 const { requestChatCompletion, describeLlmError } = require('../utils/llm');
 const { buildReplyContext } = require('../utils/prompt');
 const { applyServerVoice, samplingParamsFor } = require('../utils/voice');
+const { pickGarnishGif } = require('../utils/media');
 const { recordEvent } = require('../utils/stats');
-const { createStreamAnimator, stripThinkAndCitations, truncateForDiscord, INITIAL_LOADING_TEXT } = require('../utils/streamingReply');
+const { createStreamAnimator, stripThinkAndCitations, withGarnish, INITIAL_LOADING_TEXT } = require('../utils/streamingReply');
 
 const fallbackConfig = resolveConfig() || {};
 
@@ -113,7 +114,14 @@ async function generateAutoresponce(message) {
             return;
         }
 
-        await replyMessage.edit(truncateForDiscord(finalContent));
+        // Occasionally garnish with a GIF this server actually posts in
+        // situations like this. Rare by design (see utils/media.js).
+        const garnish = pickGarnishGif(client.db, message.guildId, conversationText(processedMessages), {
+            channelId: message.channel.id,
+            cooldowns: client.mediaCooldowns,
+        });
+
+        await replyMessage.edit(withGarnish(finalContent, garnish));
 
         recordEvent(client, 'autoresponse', {
             guildId: message.guildId,

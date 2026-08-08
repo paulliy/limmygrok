@@ -52,6 +52,16 @@ Key invariants:
 
 `utils/backfill.js` reads a channel's Discord history into the corpus when `/channels add` runs, so the bot has a dialect immediately rather than after weeks of listening.
 
+### Reaction GIFs (`utils/media.js`)
+Same thesis applied to media, with its own schema (`corpus_media` + `corpus_media_fts`, initialised from `utils/db.js`). **It never calls Tenor** — a generic GIF is not the server's in-joke.
+
+- One row per `(guild_id, url)` with a `uses` counter, not one per post: a GIF posted twenty times is one reaction used a lot.
+- **Context is mostly the *preceding* message.** A reaction GIF typically has no text of its own, so what it replies to is the only thing that makes it searchable. `events/messageStore.js` passes the previous memory entry in.
+- `pickGarnishGif` gates in cheapest-first order: per-channel cooldown → dice (`GARNISH_CHANCE`) → FTS topical match → `uses >= MIN_USES_TO_REUSE`. **The cooldown is only consumed when a GIF is actually posted**, so a miss doesn't suppress the next real match — regression-tested.
+- The URL is appended on its own line by `withGarnish` (`utils/streamingReply.js`), which truncates the *text* to make room rather than the URL — a half-URL renders as broken text. The GIF is deliberately **not** stored in `client.memory`, or the model starts inventing URLs by imitation.
+
+Custom emoji are stored as the full `<:name:id>` form, never the bare `:name:` — Discord only renders the former, and the profile feeds the model directly.
+
 ### State lives on the client, backed by SQLite
 `index.js` attaches several stores to the `client` and injects `client.llm` + `client.db` + `client.config`:
 - `client.memory`: conversation history per `channelId` → `[{ role, content }]`. `content` is either a string or an array of `{type:'text'|'image_url', ...}` parts. Capped at the last 20 entries. This is *short-term context*, distinct from the corpus (permanent, and what learning is built from).

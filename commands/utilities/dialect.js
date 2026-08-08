@@ -5,6 +5,7 @@ const {
     forgetGuild,
 } = require('../../utils/corpus');
 const { describeStyle } = require('../../utils/prompt');
+const { countMedia, forgetMedia } = require('../../utils/media');
 
 // Makes the learning layer visible. Without this the bot's voice just drifts
 // and nobody can tell whether it is picking things up, what it thinks the
@@ -52,10 +53,15 @@ module.exports = {
             }
 
             const removed = forgetGuild(db, guildId);
+            const removedMedia = forgetMedia(db, guildId);
+            const parts = [];
+            if (removed > 0) parts.push(`${removed.toLocaleString()} learned message${removed === 1 ? '' : 's'}`);
+            if (removedMedia > 0) parts.push(`${removedMedia.toLocaleString()} saved gif${removedMedia === 1 ? '' : 's'}/image${removedMedia === 1 ? '' : 's'}`);
+
             await interaction.reply({
-                content: removed === 0
+                content: parts.length === 0
                     ? 'There was nothing learned to forget.'
-                    : `Forgot ${removed.toLocaleString()} learned message${removed === 1 ? '' : 's'}. The bot starts over from here.`,
+                    : `Forgot ${parts.join(' and ')}. The bot starts over from here.`,
                 flags: MessageFlags.Ephemeral,
             });
             return;
@@ -105,6 +111,8 @@ module.exports = {
             '',
             '**Typing habits**',
             habits,
+            '',
+            `**Reaction gifs** ${countMedia(db, guildId).toLocaleString()} saved from this server, reused occasionally when the topic matches.`,
         ].join('\n');
 
         await interaction.reply({

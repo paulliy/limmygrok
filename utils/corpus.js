@@ -276,7 +276,12 @@ function computeStyleProfile(rows) {
         if (/[.!?]$/.test(raw.trim())) endsWithPunctuation += 1;
 
         for (const match of raw.matchAll(CUSTOM_EMOJI_PATTERN)) {
-            addOccurrence(customEmoji, `:${match[1]}:`, userId);
+            // Store the full <:name:id> form, not just :name:. Discord only
+            // renders a custom emoji when the ID is present, so showing the
+            // model the bare name taught it to emit text that renders as
+            // literal ":limmy:" in chat. The full form is also what makes
+            // /dialect show display the real emoji.
+            addOccurrence(customEmoji, match[0], userId);
             emojiTotal += 1;
         }
         for (const match of raw.matchAll(UNICODE_EMOJI_PATTERN)) {

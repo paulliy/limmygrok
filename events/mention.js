@@ -6,9 +6,10 @@ const { requestChatCompletion, describeLlmError } = require('../utils/llm');
 const { buildReplyContext } = require('../utils/prompt');
 const { applyServerVoice, samplingParamsFor } = require('../utils/voice');
 const { recordMessage } = require('../utils/corpus');
+const { pickGarnishGif } = require('../utils/media');
 const { isDirectlyAddressed, addressReason, aliasesFor } = require('../utils/triggers');
 const { recordEvent } = require('../utils/stats');
-const { createStreamAnimator, stripThinkAndCitations, truncateForDiscord, INITIAL_LOADING_TEXT } = require('../utils/streamingReply');
+const { createStreamAnimator, stripThinkAndCitations, withGarnish, INITIAL_LOADING_TEXT } = require('../utils/streamingReply');
 
 const fallbackConfig = resolveConfig() || {};
 
@@ -212,8 +213,16 @@ module.exports = {
                 return;
             }
 
+            // Occasionally garnish with a GIF this server actually posts in
+            // situations like this. Rare by design (see utils/media.js) — the
+            // whole point is that it lands as a reaction, not a tic.
+            const garnish = pickGarnishGif(client.db, message.guildId, messageContent, {
+                channelId: message.channel.id,
+                cooldowns: client.mediaCooldowns,
+            });
+
             if (replyMessage) {
-                await replyMessage.edit(truncateForDiscord(finalContent));
+                await replyMessage.edit(withGarnish(finalContent, garnish));
             }
 
             recordEvent(client, 'mention', {

@@ -56,6 +56,18 @@ function truncateForDiscord(text, limit = 2000) {
     return text.length > limit ? text.slice(0, limit - 3) + '...' : text;
 }
 
+// Appends a GIF/image URL on its own line so Discord unfurls it into an embed.
+// The text is truncated to leave room for the link rather than the other way
+// round — a reply cut off mid-word with a dangling half-URL is worse than no
+// GIF at all.
+function withGarnish(text, url, limit = 2000) {
+    if (!url) return truncateForDiscord(text, limit);
+    const room = limit - url.length - 1;
+    if (room < 1) return truncateForDiscord(text, limit);
+    const body = truncateForDiscord(text, room);
+    return body ? `${body}\n${url}` : url;
+}
+
 // Drives the shared "edit-in-place while streaming" UX used by mention.js,
 // autoresponce.js, and gene.js: an interval decoupled from the stream itself
 // (so Discord rate limits never block token reads) repaints either the
@@ -121,6 +133,7 @@ module.exports = {
     DOT_FRAMES,
     stripThinkAndCitations,
     truncateForDiscord,
+    withGarnish,
     createStreamAnimator,
     formatAnsiLoadingLine,
     formatAnsiIdleText,

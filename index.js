@@ -117,6 +117,10 @@ for (const file of eventFiles) {
 }
 
 client.cooldowns = new Collection();
+// Per-channel throttle for reaction GIFs. Deliberately in-memory and not a
+// PersistentMap: a restart forgetting that a GIF was posted ten minutes ago is
+// harmless, and this is written far more often than it is read.
+client.mediaCooldowns = new Map();
 
 // --- Crash guards & graceful shutdown ---------------------------------------
 

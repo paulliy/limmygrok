@@ -6,7 +6,22 @@ const { parseimgs } = require('../utils/parseimgs');
 const { safeError, debugLog } = require('../utils/log');
 const { isDirectlyAddressed } = require('../utils/triggers');
 const { recordMessage } = require('../utils/corpus');
+const { recordMedia } = require('../utils/media');
 const { recordEvent } = require('../utils/stats');
+
+// Memory entries hold either a plain string or an array of content parts;
+// media context only needs the words.
+function memoryEntryText(entry) {
+    if (!entry) return '';
+    if (typeof entry.content === 'string') return entry.content;
+    if (Array.isArray(entry.content)) {
+        return entry.content
+            .filter((part) => part && part.type === 'text')
+            .map((part) => part.text)
+            .join(' ');
+    }
+    return '';
+}
 
 module.exports = {
     name: Events.MessageCreate,
@@ -59,6 +74,16 @@ module.exports = {
                 userId: message.author.id,
                 author: message.member?.displayName || message.author.displayName || message.author.username,
                 content: message.content,
+            });
+
+            // GIFs and images are learned separately: a reaction GIF usually
+            // arrives with no text of its own, so what it is reacting *to* is
+            // the only thing that gives it a searchable meaning.
+            recordMedia(message.client.db, {
+                guildId: message.guildId,
+                content: message.content,
+                attachments: message.attachments,
+                precedingText: memoryEntryText(previousMemory[previousMemory.length - 1]),
             });
         }
 

@@ -22,7 +22,12 @@ const path = require('node:path');
 const PROVIDER_PRESETS = {
     openrouter: {
         baseURL: 'https://openrouter.ai/api/v1',
-        model: 'meta-llama/llama-3.3-70b-instruct',
+        // Multimodal on purpose: utils/parseimgs.js inlines posted images into
+        // the request, and a text-only default silently wastes that whole
+        // pipeline. This one accepts images and is cheap (cents per million
+        // input tokens). Model IDs churn — override with LLM_MODEL if this one
+        // is retired; a 404 from the provider names the model in the error.
+        model: 'qwen/qwen3.6-27b',
         label: 'OpenRouter',
     },
     groq: {

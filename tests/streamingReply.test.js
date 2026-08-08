@@ -95,3 +95,31 @@ test('regression: once real content has streamed in, ticks show raw unwrapped te
     assert.ok(!chunk.includes('```ansi'), 'real content must not be ansi-fenced');
     assert.ok(!chunk.includes(ESC), 'real content must not contain ANSI escape codes');
 });
+
+// --- withGarnish -------------------------------------------------------------
+
+const { withGarnish } = require('../utils/streamingReply');
+
+const GIF = 'https://tenor.com/view/limmy-whiff-gif-12345';
+
+test('withGarnish puts the link on its own line so Discord unfurls it', () => {
+    assert.equal(withGarnish('he whiffed', GIF), `he whiffed\n${GIF}`);
+});
+
+test('withGarnish is a plain truncate when there is no gif', () => {
+    assert.equal(withGarnish('he whiffed', null), 'he whiffed');
+    assert.equal(withGarnish('he whiffed', undefined), 'he whiffed');
+});
+
+test('withGarnish truncates the text, never the URL', () => {
+    // A half-URL renders as broken text, so the body yields the space instead.
+    const long = 'x'.repeat(2100);
+    const result = withGarnish(long, GIF);
+    assert.ok(result.length <= 2000, `expected <= 2000 chars, got ${result.length}`);
+    assert.ok(result.endsWith(GIF), 'the URL must survive intact');
+    assert.ok(result.includes('...'), 'the body should show it was cut');
+});
+
+test('withGarnish returns just the URL when the text is empty', () => {
+    assert.equal(withGarnish('', GIF), GIF);
+});

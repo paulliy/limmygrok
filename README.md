@@ -67,6 +67,19 @@ measurably strong — **a server that writes in full sentences is left completel
 alone.** Reply length is budgeted from the server's average message length
 rather than a fixed number.
 
+### Reaction GIFs
+
+The same idea applied to media: the bot records every GIF and image link posted
+in its channels, along with **the message it was reacting to** — a GIF-only post
+has no text of its own, so what it replies to is the only thing that gives it
+meaning. When a reply lands on a matching topic it occasionally posts the GIF
+your server already uses for exactly that.
+
+It never searches Tenor. A generic "confused" GIF is not your in-joke; the clip
+your server posts every single time someone whiffs is. Only links posted twice
+or more are reused, there is a per-channel cooldown, and it fires on a minority
+of replies — a reaction GIF is funny because it is occasional.
+
 ## Quick start
 
 ```bash
@@ -130,7 +143,7 @@ directly.
 | `/channels add\|remove\|list\|clear` | Which channels the bot listens and auto-responds in. `add` backfills history. *(Manage Server)* |
 | `/dialect show` | The slang, catchphrases, emoji and habits it has learned here. |
 | `/dialect refresh` | Recompute the profile now instead of waiting. |
-| `/dialect forget` | Delete everything learned from this server. *(Manage Server)* |
+| `/dialect forget` | Delete everything learned from this server, GIFs included. *(Manage Server)* |
 | `/setautoresponcerate` | How often it chimes in unprompted (default: every 20 messages). |
 | `/autoresponseinfo` | How many messages until the next one. |
 | `/generatestring` | One-off generation. Legacy — just talk to it instead. |
@@ -144,14 +157,15 @@ channel via `/channels add`.
 The bot only stores messages from channels an admin has explicitly added with
 `/channels add`, plus messages addressed to it directly. Everything lives in a
 local SQLite file — nothing is sent anywhere except the model provider, and
-`/dialect forget` deletes a server's data outright. Secrets are scrubbed from
+`/dialect forget` deletes a server's data outright. GIFs are stored as links
+only; no image is ever re-uploaded or copied. Secrets are scrubbed from
 every log line (`utils/log.js`), and full payload logging is off unless you set
 `DEBUG_PAYLOADS=1`.
 
 ## Development
 
 ```bash
-bun test                          # 171 tests
+bun test                          # 195 tests
 bun test tests/corpusLearning.test.js
 bun run dashboard                 # local usage dashboard (dev only)
 ```
