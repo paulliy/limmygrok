@@ -29,19 +29,43 @@ system, not two — no separate "Markov mode". The corpus feeds the model:
 | Can answer a question | no | yes |
 | Stays on topic | no | yes |
 
-Concretely, every reply is built from three layers:
+Concretely, every reply is built from four layers:
 
 1. **Base persona** — a member of the server, not an assistant.
 2. **Dialect profile** — the server's distinctive words, recurring phrases,
    emoji and habits, found by counting everything the server says and
    subtracting ordinary English (`utils/commonWords.js`). This is a Markov
    chain's transition table, compressed into something a model can read.
-3. **Precedent** — the real messages this server wrote about the current
+3. **Exemplars** — real server messages of typical length, shown as shapes to
+   copy.
+4. **Precedent** — the real messages this server wrote about the current
    topic, pulled by SQLite full-text search. This is where server *knowledge*
    comes from: who is who, what the in-jokes mean, what happened last week.
 
 With an empty corpus only layer 1 is sent, and the bot behaves like an ordinary
 chat model. Nothing breaks; it just has nothing to imitate yet.
+
+### Asking isn't enough
+
+A prompt is a request. A model will follow "type in lowercase, keep it short"
+for a sentence or two and then drift back to sounding like a model — the drift a
+Markov chain can't have. So the same measured profile is applied again on the
+way *out* (`utils/voice.js`):
+
+```
+model says : "Sure! Great question. Bawberry is definitely one of the weaker
+              players — he consistently whiffs the opening duel. Let me know
+              if you want more detail!"
+server gets: "bawberry is definitely one of the weaker players — he
+              consistently whiffs the opening duel"
+```
+
+It strips service-desk openers and closers, AI disclaimers, the bot signing its
+own name, and role-play where the model starts writing other people's lines.
+Casing and punctuation are only changed when the server's own habits are
+measurably strong — **a server that writes in full sentences is left completely
+alone.** Reply length is budgeted from the server's average message length
+rather than a fixed number.
 
 ## Quick start
 
@@ -127,7 +151,7 @@ every log line (`utils/log.js`), and full payload logging is off unless you set
 ## Development
 
 ```bash
-bun test                          # 148 tests
+bun test                          # 171 tests
 bun test tests/corpusLearning.test.js
 bun run dashboard                 # local usage dashboard (dev only)
 ```

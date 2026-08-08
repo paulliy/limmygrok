@@ -3,7 +3,8 @@ const { resolveConfig } = require('../utils/config');
 const { parseimgs, resolveImageUrlsToBase64 } = require('../utils/parseimgs');
 const { safeLog, safeError, debugLog } = require('../utils/log');
 const { requestChatCompletion, describeLlmError } = require('../utils/llm');
-const { buildSystemPrompt } = require('../utils/prompt');
+const { buildReplyContext } = require('../utils/prompt');
+const { applyServerVoice, samplingParamsFor } = require('../utils/voice');
 const { recordMessage } = require('../utils/corpus');
 const { isDirectlyAddressed, addressReason, aliasesFor } = require('../utils/triggers');
 const { recordEvent } = require('../utils/stats');
@@ -160,7 +161,7 @@ module.exports = {
 
             // The learned server dialect + precedent retrieved for whatever was
             // just said. This is what makes the reply sound like the server.
-            const systemPrompt = buildSystemPrompt({
+            const { systemPrompt, profile } = buildReplyContext({
                 db: client.db,
                 guildId: message.guildId,
                 queryText: messageContent,
@@ -175,22 +176,34 @@ module.exports = {
                     ...(await resolveImageUrlsToBase64(baseMessages)),
                 ],
                 stream: true,
+                ...samplingParamsFor(profile),
             };
 
             const completion = await requestChatCompletion(llm, apiPayload);
+
+            // Tracked so the voice filter can drop a sentence the token budget
+            // cut off mid-word rather than posting the fragment.
+            let finishReason = null;
 
             if (completion.isStream) {
                 for await (const chunk of completion.stream) {
                     const deltaContent = chunk.choices?.[0]?.delta?.content;
                     if (deltaContent) animator.append(deltaContent);
+                    finishReason = chunk.choices?.[0]?.finish_reason ?? finishReason;
                 }
             } else {
                 animator.append(completion.response?.choices?.[0]?.message?.content || '');
+                finishReason = completion.response?.choices?.[0]?.finish_reason ?? null;
             }
 
             animator.finish();
 
-            const finalContent = stripThinkAndCitations(animator.content);
+            // Prompting asked for the server's voice; this enforces it.
+            const finalContent = applyServerVoice(
+                stripThinkAndCitations(animator.content),
+                profile,
+                { botName: client.user?.username, wasTruncated: finishReason === 'length' }
+            );
 
             if (!finalContent) {
                 if (replyMessage) {

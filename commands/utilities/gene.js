@@ -2,7 +2,8 @@ const { SlashCommandBuilder } = require('discord.js');
 const { resolveConfig } = require('../../utils/config');
 const { safeError } = require('../../utils/log');
 const { requestChatCompletion, describeLlmError } = require('../../utils/llm');
-const { buildSystemPrompt } = require('../../utils/prompt');
+const { buildReplyContext } = require('../../utils/prompt');
+const { applyServerVoice, samplingParamsFor } = require('../../utils/voice');
 const { createStreamAnimator, stripThinkAndCitations, truncateForDiscord } = require('../../utils/streamingReply');
 
 const fallbackConfig = resolveConfig() || {};
@@ -26,7 +27,7 @@ module.exports = {
         try {
             // Same learned dialect the chat paths use, so /generatestring
             // sounds like the server too.
-            const systemPrompt = buildSystemPrompt({
+            const { systemPrompt, profile } = buildReplyContext({
                 db: client.db,
                 guildId: interaction.guildId,
                 queryText: userInput,
@@ -39,6 +40,7 @@ module.exports = {
                     { role: 'user', content: userInput }
                 ],
                 stream: true,
+                ...samplingParamsFor(profile),
             }, {
                 requestOptions: { timeout: 120_000 },
             });
@@ -61,7 +63,11 @@ module.exports = {
                 animator.append(completion.response?.choices?.[0]?.message?.content || '');
             }
 
-            const finalContent = stripThinkAndCitations(animator.content);
+            const finalContent = applyServerVoice(
+                stripThinkAndCitations(animator.content),
+                profile,
+                { botName: client.user?.username }
+            );
             animator.finish();
 
             if (!finalContent) {

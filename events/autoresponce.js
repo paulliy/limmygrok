@@ -2,7 +2,8 @@ const { resolveConfig } = require('../utils/config');
 const { parseimgs, resolveImageUrlsToBase64 } = require('../utils/parseimgs');
 const { safeError, debugLog } = require('../utils/log');
 const { requestChatCompletion, describeLlmError } = require('../utils/llm');
-const { buildSystemPrompt } = require('../utils/prompt');
+const { buildReplyContext } = require('../utils/prompt');
+const { applyServerVoice, samplingParamsFor } = require('../utils/voice');
 const { recordEvent } = require('../utils/stats');
 const { createStreamAnimator, stripThinkAndCitations, truncateForDiscord, INITIAL_LOADING_TEXT } = require('../utils/streamingReply');
 
@@ -65,7 +66,7 @@ async function generateAutoresponce(message) {
             return;
         }
 
-        const systemPrompt = buildSystemPrompt({
+        const { systemPrompt, profile } = buildReplyContext({
             db: client.db,
             guildId: message.guildId,
             queryText: conversationText(processedMessages),
@@ -80,22 +81,32 @@ async function generateAutoresponce(message) {
                 ...(await resolveImageUrlsToBase64(processedMessages)),
             ],
             stream: true,
+            ...samplingParamsFor(profile),
         };
 
         const completion = await requestChatCompletion(llm, apiPayload);
+
+        let finishReason = null;
 
         if (completion.isStream) {
             for await (const chunk of completion.stream) {
                 const deltaContent = chunk.choices?.[0]?.delta?.content;
                 if (deltaContent) animator.append(deltaContent);
+                finishReason = chunk.choices?.[0]?.finish_reason ?? finishReason;
             }
         } else {
             animator.append(completion.response?.choices?.[0]?.message?.content || '');
+            finishReason = completion.response?.choices?.[0]?.finish_reason ?? null;
         }
 
         animator.finish();
 
-        const finalContent = stripThinkAndCitations(animator.content);
+        // Prompting asked for the server's voice; this enforces it.
+        const finalContent = applyServerVoice(
+            stripThinkAndCitations(animator.content),
+            profile,
+            { botName: client.user?.username, wasTruncated: finishReason === 'length' }
+        );
 
         if (!finalContent) {
             await replyMessage.edit('The model only returned thinking content with no final response.');

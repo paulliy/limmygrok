@@ -433,6 +433,41 @@ function retrieveSimilar(db, guildId, queryText, { limit = 6 } = {}) {
     }
 }
 
+// Representative messages, chosen for shape rather than topic: close to the
+// server's typical length, one per author, recent. Retrieval shows the model
+// what the server knows; these show it what a message here looks like — which
+// is the thing a Markov chain gets for free and a prompt has to teach.
+function styleExemplars(db, guildId, { limit = 5 } = {}) {
+    if (!db || !guildId) return [];
+    try {
+        const rows = db.prepare(
+            'SELECT author, content, user_id FROM corpus_messages WHERE guild_id = ? ORDER BY ts DESC LIMIT 400'
+        ).all(guildId);
+        if (rows.length === 0) return [];
+
+        const lengths = rows.map((row) => tokenize(row.content).length).filter((n) => n > 0);
+        if (lengths.length === 0) return [];
+        const average = lengths.reduce((sum, n) => sum + n, 0) / lengths.length;
+
+        const seenAuthors = new Set();
+        return rows
+            .map((row) => ({ row, words: tokenize(row.content).length }))
+            // Skip one-word grunts and outliers; both misrepresent the norm.
+            .filter(({ words }) => words >= 2)
+            .sort((a, b) => Math.abs(a.words - average) - Math.abs(b.words - average))
+            .filter(({ row }) => {
+                const author = row.user_id || row.author;
+                if (seenAuthors.has(author)) return false;
+                seenAuthors.add(author);
+                return true;
+            })
+            .slice(0, limit)
+            .map(({ row }) => row);
+    } catch (e) {
+        return [];
+    }
+}
+
 // Fallback texture when retrieval finds nothing: a sample of how the server
 // talks in general, so the model always has real examples in front of it.
 function recentMessages(db, guildId, { limit = 6 } = {}) {
@@ -456,6 +491,7 @@ module.exports = {
     computeStyleProfile,
     retrieveSimilar,
     recentMessages,
+    styleExemplars,
     buildMatchQuery,
     tokenize,
     normalizeForLearning,

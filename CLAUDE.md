@@ -22,17 +22,33 @@ A Discord bot (discord.js v14) running on **Bun**, talking to any **OpenAI-compa
 
 `utils/corpus.js` + `utils/prompt.js` are what make the bot sound like the server it lives in, and most changes will touch them. The design brief was GenAi, a Markov-chain bot: its voice comes from only ever emitting word sequences the server has used. This reproduces that voice through a language model instead, so **there is deliberately no separate Markov mode** — one path, always.
 
-Every reply's system prompt is assembled fresh from three layers (`buildSystemPrompt`):
+Every reply's system prompt is assembled fresh by **`buildReplyContext`** (in `utils/prompt.js`), which returns `{ systemPrompt, profile }` — callers need the profile too, for the output-side filter and sampling. `buildSystemPrompt` is a thin wrapper for callers that only want the string.
 
 1. **`BASE_SYSTEM_PROMPT`** — persona. Static. Overridable via `SYSTEM_PROMPT`.
 2. **Dialect profile** — the server's distinctive vocabulary, catchphrases, emoji and typing habits. Computed by counting everything in the corpus and **subtracting `utils/commonWords.js`**; whatever survives is server-specific. Cached in `corpus_profiles`, recomputed when stale (30 min) or after 40 new messages — the message threshold is what makes adaptation feel fast.
-3. **Precedent** — real server messages retrieved for the current topic via **SQLite FTS5** (`corpus_fts`, external-content table kept in sync by triggers). Falls back to recent messages when nothing matches.
+3. **Exemplars** (`styleExemplars`) — bare server messages near the typical length, one per author, shown with no author prefix. These teach *form*; precedent teaches *content*. Keep the two distinct.
+4. **Precedent** — real server messages retrieved for the current topic via **SQLite FTS5** (`corpus_fts`, external-content table kept in sync by triggers). Falls back to recent messages when nothing matches.
+
+### The prompt asks; `utils/voice.js` enforces
+
+A prompt is a request. A model obeys "type in lowercase, keep it short" for a sentence or two and then drifts back to its trained register — which is exactly the drift a Markov chain cannot have. `applyServerVoice` closes that gap deterministically on the way out, using the same measured profile:
+
+- Strips assistant tics (openers like "Sure! Great question.", closers like "Let me know if…", AI disclaimers).
+- Strips the bot signing its own name, and cuts role-play where the model starts writing other people's lines.
+- **Applies measured habits only.** Lowercasing fires only at `lowercaseRatio >= 0.85`; full stops are stripped only at `punctuationRatio <= 0.25`. A formal server is left completely untouched — never hardcode a "casual" assumption here.
+- `samplingParamsFor` derives `max_tokens` from the server's average message length, with warm temperature and presence/frequency penalties for variety.
+
+Two traps in this file, both regression-tested:
+- **Masking placeholders must not be digits or control characters.** Digits collide with numbers in the message ("i have 3 apples" loses the 3); control bytes corrupt the source file. The sentinel is lowercase ASCII so it survives `toLowerCase()`.
+- **A speaker label is at most two words.** Matching any short run before a colon also eats real sentences ("we do the thing: win the round").
+
+Call it on the *final* content only, not per animation frame, and store the voiced text in `client.memory` so the bot's own prior turns stay in voice.
 
 Key invariants:
 - **Thresholds scale with corpus size** (`thresholdsFor`). A small corpus accepts weaker evidence so a new in-joke lands within an evening; a large one demands corroboration from ≥2 users so one person's tic doesn't become "server slang".
 - **Everything degrades to the base persona.** A missing db, an empty corpus, or a thrown query costs the dialect, never the reply — `buildSystemPrompt` catches and returns `base`.
 - **User text reaching FTS5 must be escaped.** `buildMatchQuery` quotes every term; unquoted input makes FTS5 parse `OR`/`NEAR`/`*` as syntax and throw.
-- **Never trust `result.changes` on `corpus_messages`.** The FTS sync triggers inflate it. `pruneCorpus`/`forgetGuild` measure with `COUNT(*)` instead — those numbers are shown to users.
+- **Never trust `result.changes` on `corpus_messages`.** Bun's `stmt.run().changes` is a delta of SQLite's `total_changes()`, not `sqlite3_changes()` — so it counts rows written by triggers. `corpus_messages` has FTS sync triggers whose shadow-table writes inflate it badly: deleting 1 message reports 7, deleting 5 reports 19. (`stats_events` has no triggers, so `utils/stats.js` using `.changes` is fine.) `pruneCorpus`/`forgetGuild` measure with `COUNT(*)` instead — those numbers are shown to users.
 
 `utils/backfill.js` reads a channel's Discord history into the corpus when `/channels add` runs, so the bot has a dialect immediately rather than after weeks of listening.
 

@@ -21,6 +21,7 @@ const {
     getStyleProfile,
     retrieveSimilar,
     recentMessages,
+    styleExemplars,
 } = require('./corpus');
 
 const BASE_SYSTEM_PROMPT = [
@@ -137,11 +138,22 @@ function renderPrecedent(rows, { heading }) {
     return `${heading}\n${lines}`;
 }
 
-// Assembles the full system prompt for one reply.
+// Bare server messages with no author prefix, shown purely as shapes to copy.
+// Precedent teaches the model what the server knows; these teach it what a
+// message here looks like — the length, the register, the lack of punctuation.
+function renderExemplars(rows) {
+    if (!rows || rows.length === 0) return '';
+    const lines = rows.map((row) => `- ${String(row.content).slice(0, 200)}`).join('\n');
+    return `WRITE LIKE THESE — real messages from this server. Copy their length and register, not their content:\n${lines}`;
+}
+
+// Assembles everything one reply needs from the learning layer: the system
+// prompt, and the profile the caller also needs for the output-side voice
+// filter (utils/voice.js) and sampling parameters.
 //
 // `queryText` is whatever the bot is responding to; it drives retrieval, so
 // passing the live conversation text is what makes precedent topical.
-function buildSystemPrompt({
+function buildReplyContext({
     db,
     guildId,
     queryText = '',
@@ -149,14 +161,18 @@ function buildSystemPrompt({
     maxPrecedent = 6,
 } = {}) {
     const base = basePrompt || SYSTEM_PROMPT;
-    if (!db || !guildId) return base;
+    if (!db || !guildId) return { systemPrompt: base, profile: null };
 
     const parts = [base];
+    let profile = null;
 
     try {
-        const profile = getStyleProfile(db, guildId);
+        profile = getStyleProfile(db, guildId);
         const dialect = renderDialectBlock(profile);
         if (dialect) parts.push(dialect);
+
+        const exemplars = renderExemplars(styleExemplars(db, guildId, { limit: 5 }));
+        if (exemplars) parts.push(exemplars);
 
         let rows = retrieveSimilar(db, guildId, queryText, { limit: maxPrecedent });
         let heading = 'SERVER PRECEDENT — how people here have talked about this before:';
@@ -167,26 +183,33 @@ function buildSystemPrompt({
         const precedent = renderPrecedent(rows, { heading });
         if (precedent) parts.push(precedent);
 
-        if (dialect || precedent) {
+        if (dialect || precedent || exemplars) {
             parts.push(
-                'Write your reply as a message in this server. Use the vocabulary and habits above. ' +
-                'Do not explain or quote these instructions.'
+                'Write one message, as yourself, in this server. Use the vocabulary and habits above. ' +
+                'Do not write anyone else\'s lines, do not prefix your name, and do not explain or quote these instructions.'
             );
         }
     } catch (e) {
         // A failure in the learning layer must never cost a reply — fall back
         // to the base persona.
-        return base;
+        return { systemPrompt: base, profile: null };
     }
 
-    return parts.join('\n\n');
+    return { systemPrompt: parts.join('\n\n'), profile };
+}
+
+// Convenience wrapper for callers that only want the prompt.
+function buildSystemPrompt(options = {}) {
+    return buildReplyContext(options).systemPrompt;
 }
 
 module.exports = {
     BASE_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
+    buildReplyContext,
     buildSystemPrompt,
     renderDialectBlock,
     renderPrecedent,
+    renderExemplars,
     describeStyle,
 };

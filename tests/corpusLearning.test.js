@@ -79,6 +79,37 @@ test('corpus is scoped per guild and forgetGuild wipes only that guild', () => {
     db.close();
 });
 
+// Regression guard. Bun's `stmt.run().changes` is a delta of SQLite's
+// total_changes(), not sqlite3_changes(), so it counts rows written by
+// triggers too. corpus_messages has FTS sync triggers, and each delete causes
+// several shadow-table writes — deleting 1 message reports 7, deleting 5
+// reports 19. Both counts below are shown to users by /dialect forget, so they
+// are measured with COUNT(*) instead. If someone "simplifies" either back to
+// result.changes, this fails.
+test('deletion counts are real message counts, not the driver changes tally', () => {
+    const db = tempDb();
+    seed(db, Array.from({ length: 5 }, (_, i) => ['u1', `bawberry holding site number ${i}`]));
+
+    // Prove the driver really does over-report on this table, so the reason
+    // for the workaround is visible rather than folklore.
+    const raw = db.prepare('DELETE FROM corpus_messages WHERE guild_id = ? AND content LIKE ?')
+        .run('g1', '%number 0%');
+    assert.equal(raw.changes > 1, true, 'expected the FTS triggers to inflate .changes');
+
+    assert.equal(countMessages(db, 'g1'), 4);
+    assert.equal(forgetGuild(db, 'g1'), 4, 'forgetGuild must report messages, not row-writes');
+    assert.equal(countMessages(db, 'g1'), 0);
+    db.close();
+});
+
+test('pruneCorpus reports how many messages it actually dropped', () => {
+    const db = tempDb();
+    seed(db, Array.from({ length: 10 }, (_, i) => ['u1', `bawberry holding site number ${i}`]));
+    assert.equal(pruneCorpus(db, 'g1', 4), 6);
+    assert.equal(pruneCorpus(db, 'g1', 4), 0, 'nothing to do when already under the cap');
+    db.close();
+});
+
 test('pruneCorpus keeps only the newest messages', () => {
     const db = tempDb();
     seed(db, Array.from({ length: 10 }, (_, i) => ['u1', `bawberry message number ${i}`]));
