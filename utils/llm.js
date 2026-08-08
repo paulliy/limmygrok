@@ -25,6 +25,33 @@ function providerHeaders(config) {
     return headers;
 }
 
+// OpenRouter can route the same model name to several backing hosts (e.g.
+// DeepSeek's own API, or a third party serving the same open weights), and
+// which one gets picked is not otherwise under this bot's control. This is
+// the enforcement half of that: a per-request `provider` object OpenRouter
+// reads before routing.
+//   - data_collection: 'deny' refuses any backing provider that stores or
+//     trains on the request at all.
+//   - zdr: true is stricter still — only providers with a genuine Zero Data
+//     Retention policy are eligible, not just ones that promise not to train.
+// Both default on (utils/config.js) because a bot built to hold a server's
+// private conversation should not need an opt-in for that. Only meaningful
+// for OpenRouter — other providers don't understand this field, so it is
+// scoped the same way providerHeaders() scopes its headers.
+//
+// Trade-off worth knowing: this narrows which backing hosts are eligible for
+// a given model, and in principle a request could find zero eligible hosts
+// and error. If that happens the error surfaces to the user rather than
+// failing silently; relax it with LLM_DENY_TRAINING=0 / LLM_ZDR=0 if a
+// specific model has no compliant host.
+function privacyProviderOptions(config) {
+    if (config?.PROVIDER !== 'openrouter') return undefined;
+    return {
+        data_collection: config.DENY_TRAINING === false ? 'allow' : 'deny',
+        zdr: config.ZDR !== false,
+    };
+}
+
 function createLlmClient(config) {
     return new OpenAI({
         apiKey: config.APIkey,
@@ -126,28 +153,35 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // a non-streaming request when the provider rejects streaming outright
 // (404/405, or an error that names streaming). Returns {isStream:true, stream}
 // or {isStream:false, response} — callers branch on isStream.
-async function requestChatCompletion(client, payload, { requestOptions, maxAttempts = 3 } = {}) {
+async function requestChatCompletion(client, payload, { requestOptions, maxAttempts = 3, config } = {}) {
     if (!client?.chat?.completions?.create) {
         throw new Error('LLM client is not configured.');
     }
 
+    // Applied here rather than at each of the three call sites, so passing
+    // `config` through is the only thing a caller has to remember — there is
+    // one chokepoint every reply goes through, and this is it. An explicit
+    // `payload.provider` (a caller opting into something specific) still wins.
+    const privacy = privacyProviderOptions(config);
+    const basePayload = privacy ? { provider: privacy, ...payload } : payload;
+
     let lastError;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
         try {
-            const stream = await client.chat.completions.create({ ...payload, stream: true }, requestOptions);
+            const stream = await client.chat.completions.create({ ...basePayload, stream: true }, requestOptions);
             return { isStream: true, stream, content: '' };
         } catch (error) {
             lastError = error;
             const status = statusOf(error);
             const message = typeof error?.message === 'string' ? error.message : '';
             const isStreamingProblem = /stream|no body|unsupported/i.test(message);
-            const shouldFallback = payload?.stream !== false &&
+            const shouldFallback = basePayload?.stream !== false &&
                 (status === 404 || status === 405 || isStreamingProblem);
 
             if (shouldFallback) {
                 safeLog('[LLM] Streaming rejected, retrying without streaming.');
                 const response = await client.chat.completions.create(
-                    { ...payload, stream: false },
+                    { ...basePayload, stream: false },
                     requestOptions
                 );
                 return {
@@ -180,6 +214,7 @@ module.exports = {
     createLlmClient,
     pickModel,
     messagesContainImages,
+    privacyProviderOptions,
     requestChatCompletion,
     createChatCompletionWithFallback,
     describeLlmError,

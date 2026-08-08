@@ -167,18 +167,44 @@ channel via `/channels add`.
 
 ## Privacy
 
-The bot only stores messages from channels an admin has explicitly added with
-`/channels add`, plus messages addressed to it directly. Everything lives in a
-local SQLite file — nothing is sent anywhere except the model provider, and
+**What stays local.** The bot only stores messages from channels an admin has
+explicitly added with `/channels add`, plus messages addressed to it directly.
+Everything lives in a local SQLite file on whatever machine or VM you run the
+bot on — nothing is sent anywhere except the model provider on each reply, and
 `/dialect forget` deletes a server's data outright. GIFs are stored as links
-only; no image is ever re-uploaded or copied. Secrets are scrubbed from
-every log line (`utils/log.js`), and full payload logging is off unless you set
+only; no image is ever re-uploaded or copied. Secrets are scrubbed from every
+log line (`utils/log.js`), and full payload logging is off unless you set
 `DEBUG_PAYLOADS=1`.
+
+**What goes to the model provider, and what happens to it there.** Every
+reply sends real server messages (the dialect, the precedent, the
+conversation) to whichever provider you've configured. On OpenRouter that
+message can be served by any of several backing companies hosting the same
+model — for the default text model that could be DeepSeek's own infrastructure
+or a third party serving the same open weights. By default, **every request
+this bot sends carries `provider: { data_collection: "deny", zdr: true }`**
+— OpenRouter reads this before routing and only sends the request to a
+backing host that neither trains on it nor retains it at all. This is
+per-request and on by default (`LLM_DENY_TRAINING`, `LLM_ZDR` in
+`.env.example` — set either to `0` only if a specific model has no compliant
+host and you'd rather it work than fail closed).
+
+This is enforcement, not just a promise: it's a field sent with every API
+call, not a setting you have to remember to check. It's also not a
+replacement for your **OpenRouter account's own privacy settings**
+(dashboard → Settings → Privacy) — that page has its own toggle for whether
+free-model prompts can be used for training, on some accounts by default.
+Turn that off too; the two are belt-and-suspenders, not either/or.
+
+If you switch providers, the same reasoning applies but the mechanism is
+different — Groq, Gemini, and OpenAI don't understand OpenRouter's
+`provider` field (this bot only sends it to OpenRouter), so check that
+provider's own dashboard/API for a training opt-out or retention setting.
 
 ## Development
 
 ```bash
-bun test                          # 201 tests
+bun test                          # 212 tests
 bun test tests/corpusLearning.test.js
 bun run dashboard                 # local usage dashboard (dev only)
 ```

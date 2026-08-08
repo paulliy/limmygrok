@@ -184,7 +184,7 @@ module.exports = {
                 ...samplingParamsFor(profile),
             };
 
-            const completion = await requestChatCompletion(llm, apiPayload);
+            const completion = await requestChatCompletion(llm, apiPayload, { config: llmConfig });
 
             // Tracked so the voice filter can drop a sentence the token budget
             // cut off mid-word rather than posting the fragment.

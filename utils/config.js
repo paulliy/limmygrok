@@ -87,12 +87,33 @@ const ENV_ALIASES = {
     SYSTEM_PROMPT: ['SYSTEM_PROMPT'],
     APP_URL: ['APP_URL', 'OPENROUTER_SITE_URL'],
     APP_NAME: ['APP_NAME', 'OPENROUTER_APP_NAME'],
+    // Privacy controls sent with every OpenRouter request (utils/llm.js
+    // applies these; see PRIVACY_BOOLEAN_KEYS below for the defaults).
+    DENY_TRAINING: ['LLM_DENY_TRAINING', 'DENY_TRAINING'],
+    ZDR: ['LLM_ZDR', 'ZDR'],
+};
+
+// Config keys that are booleans, and what they default to when nothing sets
+// them. Both privacy flags default ON: the point of a bot that is supposed to
+// hold a server's private conversation is that the answer to "will this train
+// someone else's model" is no by default, not opt-in.
+const PRIVACY_BOOLEAN_KEYS = {
+    DENY_TRAINING: true,
+    ZDR: true,
 };
 
 function isBlank(value) {
     return value === undefined ||
         value === null ||
         (typeof value === 'string' && value.trim() === '');
+}
+
+// Accepts a real boolean (config.json can hold one), the usual env-var truthy
+// strings, or nothing — in which case the caller's default applies.
+function parseBooleanFlag(value, defaultValue) {
+    if (typeof value === 'boolean') return value;
+    if (isBlank(value)) return defaultValue;
+    return /^(1|true|yes|on)$/i.test(String(value).trim());
 }
 
 function missingConfigKeys(config, requiredKeys) {
@@ -143,6 +164,13 @@ function resolveConfig({ env = process.env, fileConfig, configPath } = {}) {
         return null;
     }
 
+    // Normalize once here so every downstream reader (utils/llm.js, index.js,
+    // the fallbackConfig in each event handler) sees a real boolean rather
+    // than re-parsing "0"/"false"/undefined itself.
+    for (const [key, defaultValue] of Object.entries(PRIVACY_BOOLEAN_KEYS)) {
+        resolved[key] = parseBooleanFlag(resolved[key], defaultValue);
+    }
+
     const providerName = String(resolved.PROVIDER || DEFAULT_PROVIDER).trim().toLowerCase();
     const preset = PROVIDER_PRESETS[providerName];
     resolved.PROVIDER = providerName;
@@ -178,7 +206,9 @@ module.exports = {
     loadConfigFile,
     resolveConfig,
     describeProvider,
+    parseBooleanFlag,
     PROVIDER_PRESETS,
+    PRIVACY_BOOLEAN_KEYS,
     DEFAULT_PROVIDER,
     ENV_ALIASES,
 };

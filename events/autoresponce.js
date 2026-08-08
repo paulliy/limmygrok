@@ -89,7 +89,7 @@ async function generateAutoresponce(message) {
             ...samplingParamsFor(profile),
         };
 
-        const completion = await requestChatCompletion(llm, apiPayload);
+        const completion = await requestChatCompletion(llm, apiPayload, { config: llmConfig });
 
         let finishReason = null;
 

@@ -214,3 +214,109 @@ test('the vision model can be overridden independently', () => {
     assert.equal(config.VISION_MODEL, 'my/vision');
     assert.equal(config.MODEL_NAME, PROVIDER_PRESETS.openrouter.model, 'text model is untouched');
 });
+
+// --- privacy: deny-training / zero data retention -----------------------------
+
+const { parseBooleanFlag, PRIVACY_BOOLEAN_KEYS } = require('../utils/config');
+const { privacyProviderOptions } = require('../utils/llm');
+
+test('privacy flags default on with no configuration at all', () => {
+    const config = resolveConfig({ env: {}, fileConfig: { token: 't', APIkey: 'k' } });
+    assert.equal(config.DENY_TRAINING, true);
+    assert.equal(config.ZDR, true);
+});
+
+test('privacy flags can be turned off via env, in either the LLM_-prefixed or bare name', () => {
+    const a = resolveConfig({ env: { LLM_DENY_TRAINING: '0', ZDR: 'false' }, fileConfig: { token: 't', APIkey: 'k' } });
+    assert.equal(a.DENY_TRAINING, false);
+    assert.equal(a.ZDR, false);
+});
+
+test('a real boolean in config.json is honoured, not stringified', () => {
+    const config = resolveConfig({ env: {}, fileConfig: { token: 't', APIkey: 'k', ZDR: false } });
+    assert.equal(config.ZDR, false);
+});
+
+test('parseBooleanFlag: common truthy/falsy spellings, and default on blank', () => {
+    for (const truthy of ['1', 'true', 'TRUE', 'yes', 'on']) {
+        assert.equal(parseBooleanFlag(truthy, false), true, truthy);
+    }
+    for (const falsy of ['0', 'false', 'FALSE', 'no', 'off']) {
+        assert.equal(parseBooleanFlag(falsy, true), false, falsy);
+    }
+    assert.equal(parseBooleanFlag(undefined, true), true);
+    assert.equal(parseBooleanFlag('', false), false);
+    assert.equal(parseBooleanFlag(true, false), true, 'a real boolean passes through');
+});
+
+test('both privacy keys default true — the point is opt-out, not opt-in', () => {
+    assert.deepEqual(PRIVACY_BOOLEAN_KEYS, { DENY_TRAINING: true, ZDR: true });
+});
+
+test('privacyProviderOptions denies training and requires ZDR by default, OpenRouter only', () => {
+    const options = privacyProviderOptions({ PROVIDER: 'openrouter', DENY_TRAINING: true, ZDR: true });
+    assert.deepEqual(options, { data_collection: 'deny', zdr: true });
+
+    // Every other provider either has its own dashboard-level controls or
+    // doesn't understand this field — sending it would be a no-op at best.
+    assert.equal(privacyProviderOptions({ PROVIDER: 'groq' }), undefined);
+    assert.equal(privacyProviderOptions({ PROVIDER: 'gemini' }), undefined);
+    assert.equal(privacyProviderOptions(undefined), undefined);
+});
+
+test('privacyProviderOptions reflects an explicit opt-out', () => {
+    assert.deepEqual(
+        privacyProviderOptions({ PROVIDER: 'openrouter', DENY_TRAINING: false, ZDR: false }),
+        { data_collection: 'allow', zdr: false }
+    );
+});
+
+test('requestChatCompletion actually sends the privacy fields to OpenRouter', async () => {
+    let seenPayload;
+    const client = stubClient((call, payload) => {
+        seenPayload = payload;
+        return { marker: 'stream' };
+    });
+
+    await requestChatCompletion(client, { model: 'm', messages: [] }, {
+        config: { PROVIDER: 'openrouter', DENY_TRAINING: true, ZDR: true },
+    });
+
+    assert.deepEqual(seenPayload.provider, { data_collection: 'deny', zdr: true });
+});
+
+test('an explicit payload.provider from the caller is not overwritten', async () => {
+    let seenPayload;
+    const client = stubClient((call, payload) => {
+        seenPayload = payload;
+        return { marker: 'stream' };
+    });
+
+    await requestChatCompletion(client, { model: 'm', messages: [], provider: { order: ['fireworks'] } }, {
+        config: { PROVIDER: 'openrouter', DENY_TRAINING: true, ZDR: true },
+    });
+
+    assert.deepEqual(seenPayload.provider, { order: ['fireworks'] });
+});
+
+test('no config passed means no privacy fields are added — back-compat for old callers', async () => {
+    let seenPayload;
+    const client = stubClient((call, payload) => { seenPayload = payload; return { marker: 'stream' }; });
+    await requestChatCompletion(client, { model: 'm', messages: [] });
+    assert.equal('provider' in seenPayload, false);
+});
+
+test('privacy fields still apply to the non-streaming fallback request', async () => {
+    let seenNonStreamingPayload;
+    const client = stubClient((call, payload) => {
+        if (payload.stream === true) throw httpError(405, 'streaming unsupported');
+        seenNonStreamingPayload = payload;
+        return { choices: [{ message: { content: 'ok' } }] };
+    });
+
+    await requestChatCompletion(client, { model: 'm', messages: [] }, {
+        config: { PROVIDER: 'openrouter', DENY_TRAINING: true, ZDR: true },
+    });
+
+    assert.deepEqual(seenNonStreamingPayload.provider, { data_collection: 'deny', zdr: true });
+});

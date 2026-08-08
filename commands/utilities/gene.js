@@ -44,6 +44,7 @@ module.exports = {
                 ...samplingParamsFor(profile),
             }, {
                 requestOptions: { timeout: 120_000 },
+                config: llmConfig,
             });
 
             // Decoupled editing interval prevents Discord rate limits from blocking the stream
