@@ -1,7 +1,11 @@
 const { SlashCommandBuilder } = require('discord.js');
-const {MODEL_NAME} = require('../../config.json');
-const { safeError, createChatCompletionWithFallback } = require('../../utils/parseimgs');
+const { resolveConfig } = require('../../utils/config');
+const { safeError } = require('../../utils/log');
+const { requestChatCompletion, describeLlmError } = require('../../utils/llm');
+const { buildSystemPrompt } = require('../../utils/prompt');
 const { createStreamAnimator, stripThinkAndCitations, truncateForDiscord } = require('../../utils/streamingReply');
+
+const fallbackConfig = resolveConfig() || {};
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -14,19 +18,29 @@ module.exports = {
     async execute(interaction) {
         await interaction.deferReply();
         const userInput = interaction.options.getString('input');
-        const openWebUI = interaction.client.openWebUI;
+        const client = interaction.client;
+        const llm = client.llm || client.openWebUI;
+        const modelName = client.config?.MODEL_NAME || fallbackConfig.MODEL_NAME;
         let animator;
 
         try {
-            const completion = await createChatCompletionWithFallback(openWebUI, {
-                model: MODEL_NAME,
+            // Same learned dialect the chat paths use, so /generatestring
+            // sounds like the server too.
+            const systemPrompt = buildSystemPrompt({
+                db: client.db,
+                guildId: interaction.guildId,
+                queryText: userInput,
+            });
+
+            const completion = await requestChatCompletion(llm, {
+                model: modelName,
                 messages: [
+                    { role: 'system', content: systemPrompt },
                     { role: 'user', content: userInput }
                 ],
                 stream: true,
-                // Removed non-standard 'features' object to prevent OpenWebUI from dropping the request
             }, {
-                timeout: 120_000,
+                requestOptions: { timeout: 120_000 },
             });
 
             // Decoupled editing interval prevents Discord rate limits from blocking the stream
@@ -61,8 +75,8 @@ module.exports = {
             if (animator) {
                 animator.finish();
             }
-            safeError('OpenWebUI Error:', error);
-            await interaction.editReply(`Error: ${error.message ?? 'Something went wrong.'}`).catch(() => {});
+            safeError('[GENE] LLM error:', error);
+            await interaction.editReply(describeLlmError(error, client.config || fallbackConfig)).catch(() => {});
         } finally {
             if (animator) {
                 animator.finish();

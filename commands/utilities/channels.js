@@ -10,6 +10,7 @@ const {
     listAllowedChannels,
     clearAllowedChannels,
 } = require('../../events/channelSettings');
+const { backfillChannel } = require('../../utils/backfill');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -75,7 +76,18 @@ module.exports = {
 
             if (subcommand === 'add') {
                 allowChannel(client, channel.id, guildId);
-                await interaction.reply({ content: `Auto-responses are now **enabled** in <#${channel.id}>.`, flags: MessageFlags.Ephemeral });
+
+                // Read the channel's existing history once so the bot has a
+                // dialect immediately instead of after weeks of listening.
+                // Deferred because fetching up to 1000 messages takes longer
+                // than Discord's 3s interaction window.
+                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+                const learned = await backfillChannel(client, channel);
+                await interaction.editReply({
+                    content: learned > 0
+                        ? `Auto-responses are now **enabled** in <#${channel.id}>, and I read back ${learned.toLocaleString()} messages to learn how this server talks. Try \`/dialect show\`.`
+                        : `Auto-responses are now **enabled** in <#${channel.id}>.`,
+                });
             } else {
                 const removed = disallowChannel(client, channel.id);
                 await interaction.reply({

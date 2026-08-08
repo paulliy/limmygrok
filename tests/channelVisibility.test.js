@@ -146,7 +146,13 @@ function createInteraction({ subcommand, channelOption = null, channelId = 'ch-1
                 getSubcommand: () => subcommand,
                 getChannel: () => channelOption,
             },
+            // /channels add defers, backfills the channel's history, then
+            // edits its reply — so the mock has to accept all three. Both
+            // reply() and editReply() land in `replies` so assertions can stay
+            // indifferent to which path a subcommand took.
             reply: async (payload) => { replies.push(payload); },
+            deferReply: async () => { },
+            editReply: async (payload) => { replies.push(payload); },
         },
     };
 }

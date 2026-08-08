@@ -2,7 +2,10 @@ const { Events } = require('discord.js');
 const { generateAutoresponce } = require('./autoresponce');
 const { getAutoResponseRate, resetAutoResponseCount } = require('./autoResponseState');
 const { isChannelAllowed } = require('./channelSettings');
-const { parseimgs, safeLog, safeError } = require('../utils/parseimgs');
+const { parseimgs } = require('../utils/parseimgs');
+const { safeError, debugLog } = require('../utils/log');
+const { isDirectlyAddressed } = require('../utils/triggers');
+const { recordMessage } = require('../utils/corpus');
 const { recordEvent } = require('../utils/stats');
 
 module.exports = {
@@ -12,21 +15,20 @@ module.exports = {
         // Don't store bot messages to avoid circularity/redundancy
         if (message.author.bot) return;
 
-        // Messages that mention the bot are owned entirely by events/mention.js:
-        // it stores the (mention-stripped) user turn and generates the reply.
-        // Skipping here avoids double-storing the same message regardless of the
-        // order these two MessageCreate listeners run in.
-        const isMentioned = message.mentions?.users
-            ? message.mentions.users.has(message.client.user.id)
-            : message.mentions?.has?.(message.client.user, { ignoreEveryone: true, ignoreRoles: true });
-        if (isMentioned) return;
+        // Messages addressed to the bot — @mention, a reply to it, or its name
+        // — are owned entirely by events/mention.js: it stores the user turn,
+        // feeds the corpus, and generates the reply. Skipping here avoids
+        // double-processing regardless of listener order.
+        if (isDirectlyAddressed(message)) return;
 
         const channelId = message.channel.id;
 
-        // Ambient auto-responses are opt-in per channel. If this channel is not
-        // on the allowlist, ignore the message entirely: no memory, no counting,
-        // no auto-response. (Direct @mentions bypass this via events/mention.js.)
+        // Ambient learning and auto-responses are opt-in per channel. Off the
+        // allowlist the bot ignores the message entirely: nothing stored,
+        // nothing learned, nothing counted. (Direct address bypasses this via
+        // events/mention.js.)
         if (!isChannelAllowed(message.client, channelId)) return;
+
         const previousMemory = message.client.memory.get(channelId) || [];
         let memory = previousMemory.slice();
 
@@ -46,16 +48,27 @@ module.exports = {
 
         message.client.memory.set(channelId, memory);
 
+        // Feed the long-term corpus. Unlike `memory` (a 20-turn rolling window
+        // used as conversation context) this is permanent and is what the
+        // dialect profile and precedent retrieval are built from — the bot's
+        // actual learning.
+        if (message.guildId) {
+            recordMessage(message.client.db, {
+                guildId: message.guildId,
+                channelId,
+                userId: message.author.id,
+                author: message.member?.displayName || message.author.displayName || message.author.username,
+                content: message.content,
+            });
+        }
+
         recordEvent(message.client, 'message', {
             guildId: message.guildId,
             channelId,
             userId: message.author.id,
         });
 
-        safeLog(`\n[DEBUG] Memory Update`, JSON.stringify({
-            added,
-            removed
-        }, null, 2));
+        debugLog('[MEMORY]', JSON.stringify({ added, removed }, null, 2));
 
         // Handle counter for auto-response
         let count = message.client.messageCounts.get(channelId) || 0;

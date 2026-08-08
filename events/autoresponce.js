@@ -1,15 +1,38 @@
-const { MODEL_NAME } = require('../config.json');
-const { parseimgs, resolveImageUrlsToBase64, safeLog, safeError, createChatCompletionWithFallback, SYSTEM_PROMPT } = require('../utils/parseimgs');
+const { resolveConfig } = require('../utils/config');
+const { parseimgs, resolveImageUrlsToBase64 } = require('../utils/parseimgs');
+const { safeError, debugLog } = require('../utils/log');
+const { requestChatCompletion, describeLlmError } = require('../utils/llm');
+const { buildSystemPrompt } = require('../utils/prompt');
 const { recordEvent } = require('../utils/stats');
 const { createStreamAnimator, stripThinkAndCitations, truncateForDiscord, INITIAL_LOADING_TEXT } = require('../utils/streamingReply');
 
+const fallbackConfig = resolveConfig() || {};
 
+// Flattens recent turns into one string for retrieval. Precedent should be
+// pulled against what the channel is actually talking about right now, not
+// just the single message that happened to trip the counter.
+function conversationText(messages, limit = 6) {
+    return messages
+        .slice(-limit)
+        .map((msg) => {
+            if (typeof msg.content === 'string') return msg.content;
+            if (Array.isArray(msg.content)) {
+                return msg.content
+                    .filter((part) => part && part.type === 'text')
+                    .map((part) => part.text)
+                    .join(' ');
+            }
+            return '';
+        })
+        .join('\n');
+}
 
 async function generateAutoresponce(message) {
     if (message.author.bot) return;
 
+    const client = message.client;
     const channelId = message.channel.id;
-    const history = message.client.memory.get(channelId) || [];
+    const history = client.memory.get(channelId) || [];
 
     // Use the last 20 messages for context
     const contextMessages = history.slice(-20);
@@ -18,7 +41,9 @@ async function generateAutoresponce(message) {
 
     await message.channel.sendTyping();
 
-    const openWebUI = message.client.openWebUI;
+    const llm = client.llm || client.openWebUI;
+    const modelName = client.config?.MODEL_NAME || fallbackConfig.MODEL_NAME;
+
     let replyMessage;
     try {
         replyMessage = await message.reply(INITIAL_LOADING_TEXT);
@@ -27,9 +52,6 @@ async function generateAutoresponce(message) {
         return;
     }
 
-    safeLog(`\n[DEBUG] --- AUTO-RESPONSE STREAM STARTED ---`);
-
-    // 1. Start the animation interval IMMEDIATELY
     const animator = createStreamAnimator({
         edit: (chunk) => replyMessage.edit(chunk),
     });
@@ -43,66 +65,62 @@ async function generateAutoresponce(message) {
             return;
         }
 
-        const logPayload = {
-            model: MODEL_NAME,
-            messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...processedMessages],
-            stream: true,
-        };
-        safeLog(`\n[DEBUG] API Payload (pre-resolution):`, JSON.stringify(logPayload, null, 2));
+        const systemPrompt = buildSystemPrompt({
+            db: client.db,
+            guildId: message.guildId,
+            queryText: conversationText(processedMessages),
+        });
+
+        debugLog('[AUTORESPONSE] system prompt:', systemPrompt);
 
         const apiPayload = {
-            model: MODEL_NAME,
-            messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...(await resolveImageUrlsToBase64(processedMessages))],
+            model: modelName,
+            messages: [
+                { role: 'system', content: systemPrompt },
+                ...(await resolveImageUrlsToBase64(processedMessages)),
+            ],
             stream: true,
         };
 
-        const completion = await createChatCompletionWithFallback(openWebUI, apiPayload);
+        const completion = await requestChatCompletion(llm, apiPayload);
 
         if (completion.isStream) {
             for await (const chunk of completion.stream) {
                 const deltaContent = chunk.choices?.[0]?.delta?.content;
-                if (deltaContent) {
-                    animator.append(deltaContent);
-                    process.stdout.write(deltaContent);
-                }
+                if (deltaContent) animator.append(deltaContent);
             }
         } else {
             animator.append(completion.response?.choices?.[0]?.message?.content || '');
         }
 
         animator.finish();
-        safeLog(`\n[DEBUG] --- AUTO-RESPONSE STREAM FINISHED ---`);
 
         const finalContent = stripThinkAndCitations(animator.content);
-
-        const truncatedFinalContent = truncateForDiscord(finalContent);
 
         if (!finalContent) {
             await replyMessage.edit('The model only returned thinking content with no final response.');
             return;
         }
 
-        await replyMessage.edit(truncatedFinalContent);
+        await replyMessage.edit(truncateForDiscord(finalContent));
 
-        recordEvent(message.client, 'autoresponse', {
+        recordEvent(client, 'autoresponse', {
             guildId: message.guildId,
             channelId: message.channel.id,
         });
 
         // Add the bot's final response to the memory
-        let currentMemory = message.client.memory.get(message.channel.id) || [];
+        let currentMemory = client.memory.get(message.channel.id) || [];
         currentMemory.push({ role: 'assistant', content: finalContent });
         if (currentMemory.length > 20) {
             currentMemory = currentMemory.slice(-20);
         }
-        message.client.memory.set(message.channel.id, currentMemory);
-
-        safeLog(`\n[DEBUG] Updated Memory:`, JSON.stringify(currentMemory, null, 2));
+        client.memory.set(message.channel.id, currentMemory);
 
     } catch (error) {
         animator.finish();
-        safeError('OpenWebUI Error:', error);
-        await replyMessage.edit(`Error: ${error.message ?? 'Something went wrong.'}`).catch(() => {});
+        safeError('[AUTORESPONSE] LLM error:', error);
+        await replyMessage.edit(describeLlmError(error, client.config || fallbackConfig)).catch(() => {});
     } finally {
         animator.finish();
     }

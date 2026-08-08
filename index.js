@@ -2,27 +2,30 @@
 const { Client, Events, GatewayIntentBits, Collection, MessageFlags} = require('discord.js');
 const fs = require('node:fs');
 const path = require('node:path');
-const { safeLog, safeError } = require('./utils/parseimgs');
+const { safeLog, safeError } = require('./utils/log');
 const { openDatabase, PersistentMap } = require('./utils/db');
 const { pruneStatsEvents } = require('./utils/stats');
-const { assertRequiredConfig, loadConfig } = require('./utils/config');
+const { assertRequiredConfig, resolveConfig, describeProvider } = require('./utils/config');
+const { createLlmClient } = require('./utils/llm');
 
 // Fail fast with one clear message instead of a cryptic downstream error
-// (raw MODULE_NOT_FOUND, bad-token login, `undefined` model in API
-// payloads). SYSTEM_PROMPT is optional — utils/parseimgs.js falls back to
-// a default.
-const config = loadConfig();
+// (bad-token login, `undefined` model in API payloads). Configuration comes
+// from environment variables first, then config.json — see utils/config.js.
+// API_BASE_URL and MODEL_NAME are normally supplied by the provider preset,
+// so in practice only a token and an API key are mandatory.
+const config = resolveConfig();
 if (!config) {
-    safeError('[FATAL] config.json not found next to index.js. In Docker, bind-mount it: -v /path/to/config.json:/app/config.json:ro');
+    safeError('[FATAL] No configuration found. Set DISCORD_TOKEN and LLM_API_KEY in the environment, or provide a config.json next to index.js.');
     process.exit(1);
 }
 try {
     assertRequiredConfig(config, ['token', 'APIkey', 'API_BASE_URL', 'MODEL_NAME']);
 } catch (error) {
     safeError(`[FATAL] ${error.message}`);
+    safeError('[FATAL] Set them as environment variables (DISCORD_TOKEN, LLM_API_KEY, LLM_MODEL) or in config.json.');
     process.exit(1);
 }
-const { token, APIkey, API_BASE_URL } = config;
+const { token } = config;
 // Create a new client instance
 const client = new Client({
     intents: [
@@ -34,7 +37,6 @@ const client = new Client({
 
 const foldersPath = path.join(__dirname, 'commands');
 const commandFolders = fs.readdirSync(foldersPath);
-const {OpenAI} = require('openai');
 // When the client is ready, run this code (only once).
 // The distinction between `client: Client<boolean>` and `readyClient: Client<true>` is important for TypeScript developers.
 // The distinction between `client: Client` and `readyClient: Client<true>` is important for TypeScript developers.
@@ -63,11 +65,16 @@ pruneStatsEvents(db);
 const statsPruneInterval = setInterval(() => pruneStatsEvents(db), 24 * 60 * 60 * 1000);
 statsPruneInterval.unref?.();
 
-const openWebUI = new OpenAI({
-  apiKey: APIkey,
-  baseURL: API_BASE_URL
-});
-client.openWebUI = openWebUI;
+// The LLM client. Provider is config-driven (OpenRouter by default) — see
+// utils/config.js for the presets and utils/llm.js for the request wrapper.
+const llm = createLlmClient(config);
+client.llm = llm;
+client.config = config;
+// Back-compat alias: handlers written against the old OpenWebUI backend still
+// reach the same client through this name.
+client.openWebUI = llm;
+
+safeLog(`[BOOT] LLM provider: ${describeProvider(config)} — model ${config.MODEL_NAME}`);
 
 
 for (const folder of commandFolders) {

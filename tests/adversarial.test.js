@@ -536,10 +536,17 @@ test('Log scrubbing - user message containing Discord token is redacted', async 
         logs.push(args.map(arg => arg instanceof Error ? `${arg.message}\n${arg.stack}` : String(arg)).join(' '));
     };
 
+    // The per-message memory dump is opt-in (utils/log.js), and it is the log
+    // line this test inspects — turn it on for the duration.
+    const previousDebug = process.env.DEBUG_PAYLOADS;
+    process.env.DEBUG_PAYLOADS = '1';
+
     try {
         await messageStore.execute(msg);
     } finally {
         console.log = originalLog;
+        if (previousDebug === undefined) delete process.env.DEBUG_PAYLOADS;
+        else process.env.DEBUG_PAYLOADS = previousDebug;
     }
 
     const hasRedacted = logs.some(log => log.includes('[REDACTED_DISCORD_TOKEN]'));

@@ -10,7 +10,8 @@
 // events/commands code.
 
 const { Database } = require('bun:sqlite');
-const { safeError } = require('./parseimgs');
+const { safeError } = require('./log');
+const { initCorpusSchema } = require('./corpus');
 
 function openDatabase(filePath) {
     const db = new Database(filePath, { create: true });
@@ -39,6 +40,11 @@ function openDatabase(filePath) {
         );
     `);
     db.exec('CREATE INDEX IF NOT EXISTS idx_stats_events_type_ts ON stats_events (type, ts);');
+
+    // The learned server corpus + its FTS index and cached dialect profiles.
+    // Defined in utils/corpus.js so the learning layer owns its own schema.
+    initCorpusSchema(db);
+
     return db;
 }
 

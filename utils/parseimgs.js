@@ -1,15 +1,14 @@
 'use strict';
 
-const dns = require('dns').promises;
-let config = {};
-try {
-    config = require('../config.json');
-} catch (e) {
-    // Ignore if not present
-}
+// Discord message -> OpenAI chat-payload conversion, plus the image pipeline.
+//
+// Logging helpers (safeLog/safeError) now live in utils/log.js and the chat
+// request wrapper in utils/llm.js; both are re-exported from here so existing
+// imports keep working.
 
-const DEFAULT_SYSTEM_PROMPT = 'You are a helpful assistant in a Discord chat.';
-const SYSTEM_PROMPT = config.SYSTEM_PROMPT || DEFAULT_SYSTEM_PROMPT;
+const dns = require('dns').promises;
+const { safeLog, safeError, debugLog } = require('./log');
+const { BASE_SYSTEM_PROMPT, SYSTEM_PROMPT } = require('./prompt');
 
 const URL_REGEX = /https?:\/\/[^\s]+/gi;
 const IMAGE_MIME_TYPES_BY_EXTENSION = {
@@ -400,97 +399,11 @@ function parseimgs(messages) {
     return merged;
 }
 
-function scrubString(str) {
-    if (typeof str !== 'string') return str;
-    let result = str;
-    const discordToken = config.token;
-    const apiKey = config.APIkey;
-    if (discordToken && typeof discordToken === 'string' && discordToken.trim() !== '') {
-        result = result.split(discordToken).join('[REDACTED_DISCORD_TOKEN]');
-    }
-    if (apiKey && typeof apiKey === 'string' && apiKey.trim() !== '') {
-        result = result.split(apiKey).join('[REDACTED_API_KEY]');
-    }
-    return result;
-}
-
-function scrubValue(val, seen = new WeakSet()) {
-    if (typeof val === 'string') {
-        return scrubString(val);
-    }
-    if (val && typeof val === 'object') {
-        if (seen.has(val)) {
-            return val;
-        }
-        seen.add(val);
-
-        if (val instanceof Error) {
-            const scrubbedErr = new Error(scrubString(val.message));
-            scrubbedErr.name = val.name;
-            if (val.stack) {
-                scrubbedErr.stack = scrubString(val.stack);
-            }
-            for (const key of Object.keys(val)) {
-                scrubbedErr[key] = scrubValue(val[key], seen);
-            }
-            return scrubbedErr;
-        }
-
-        if (Array.isArray(val)) {
-            return val.map(item => scrubValue(item, seen));
-        }
-
-        const scrubbedObj = {};
-        for (const key of Object.keys(val)) {
-            scrubbedObj[key] = scrubValue(val[key], seen);
-        }
-        return scrubbedObj;
-    }
-    return val;
-}
-
-function safeLog(...args) {
-    const scrubbedArgs = args.map(arg => scrubValue(arg));
-    console.log(...scrubbedArgs);
-}
-
-function safeError(...args) {
-    const scrubbedArgs = args.map(arg => scrubValue(arg));
-    console.error(...scrubbedArgs);
-}
-
-async function createChatCompletionWithFallback(openWebUI, payload, requestOptions) {
-    if (!openWebUI?.chat?.completions?.create) {
-        throw new Error('OpenWebUI client is not configured.');
-    }
-
-    try {
-        const stream = await openWebUI.chat.completions.create({ ...payload, stream: true }, requestOptions);
-        return { isStream: true, stream, content: '' };
-    } catch (error) {
-        const statusCode = error?.status || error?.statusCode || error?.response?.status;
-        const message = typeof error?.message === 'string' ? error.message : '';
-        const isStreamingProblem = /stream|no body|unsupported/i.test(message);
-        const shouldFallback = payload?.stream !== false && (
-            statusCode === 404 ||
-            statusCode === 405 ||
-            isStreamingProblem
-        );
-
-        if (!shouldFallback) {
-            throw error;
-        }
-
-        safeLog('\n[DEBUG] Streaming chat request failed, retrying without streaming.', error);
-        const fallbackPayload = { ...payload, stream: false };
-        const response = await openWebUI.chat.completions.create(fallbackPayload, requestOptions);
-        return {
-            isStream: false,
-            response,
-            content: response?.choices?.[0]?.message?.content || ''
-        };
-    }
-}
+// Re-exported for back-compat with the handlers that used to import the chat
+// wrapper from here. Safe because utils/llm.js depends on utils/log.js rather
+// than on this module — if it ever imports this file back, these become
+// undefined at runtime.
+const { createChatCompletionWithFallback, requestChatCompletion } = require('./llm');
 
 module.exports = {
     isImageUrl,
@@ -501,6 +414,9 @@ module.exports = {
     resolveImageUrlsToBase64,
     safeLog,
     safeError,
+    debugLog,
     createChatCompletionWithFallback,
+    requestChatCompletion,
+    BASE_SYSTEM_PROMPT,
     SYSTEM_PROMPT
 };

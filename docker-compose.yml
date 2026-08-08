@@ -1,0 +1,40 @@
+# Deployment for a single always-on host — an Oracle Cloud Free Tier Ampere
+# VM in this repo's case (see docs/DEPLOY-ORACLE.md), but nothing here is
+# Oracle-specific.
+#
+#   docker compose up -d          start (and restart on boot / on crash)
+#   docker compose logs -f        follow the bot's output
+#   docker compose pull && docker compose up -d --build   deploy a new version
+#
+# Secrets come from a .env file next to this one (copy .env.example). No
+# config.json is needed — utils/config.js reads the environment first.
+
+services:
+  limmygrok:
+    build:
+      context: .
+    image: limmygrok:latest
+    container_name: limmygrok
+    # The bot is a Discord gateway client: it holds an outbound websocket and
+    # exposes no ports. Nothing needs to be published, and the VM's firewall
+    # can stay closed.
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Conversation memory, channel settings, and the learned server corpus.
+      # Without this the bot forgets everything — including everything it has
+      # learned about how the server talks — on every redeploy.
+      - limmygrok-data:/data
+    # A 256 MB free-tier slice is enough for the bot itself; the cap stops a
+    # runaway from taking the whole VM down with it.
+    mem_limit: 512m
+    logging:
+      # Journald/json logs otherwise grow until they fill the boot volume.
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  limmygrok-data:

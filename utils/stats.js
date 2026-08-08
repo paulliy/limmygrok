@@ -4,7 +4,7 @@
 // failure must never break the bot, so every insert is wrapped and swallowed
 // (mirroring PersistentMap's persistence error handling in utils/db.js).
 
-const { safeError } = require('./parseimgs');
+const { safeError } = require('./log');
 
 const insertStatements = new WeakMap();
 
