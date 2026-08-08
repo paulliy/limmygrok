@@ -26,9 +26,16 @@ const PROVIDER_PRESETS = {
         // is what a bot writing one-line replies all day actually needs. It is
         // text-only, hence the separate visionModel below.
         model: 'deepseek/deepseek-v4-flash-0731',
-        // Used only for the requests that actually carry an image. Paying
-        // multimodal prices on every "who whiffed" is pure waste.
-        visionModel: 'qwen/qwen3.6-27b',
+        // Used only for the requests that actually carry an image.
+        //
+        // Its headline $0.03/M input rate applies below 32K tokens and jumps
+        // to $0.20/M above that. The bot stays far under: the system prompt,
+        // a handful of turns and an inlined image come to a few thousand
+        // tokens. Worth remembering before widening the history window.
+        //
+        // Floating alias — pin qwen/qwen3.7-flash-20260727 to freeze the
+        // revision.
+        visionModel: 'qwen/qwen3.7-flash',
         label: 'OpenRouter',
     },
     groq: {

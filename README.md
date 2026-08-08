@@ -136,18 +136,18 @@ chat-completions, so switching providers is a base URL and a model name:
 Anything else OpenAI-compatible works too — set `LLM_BASE_URL` and `LLM_MODEL`
 directly.
 
-**Two models, routed per request.** The cheapest fast models are text-only, so
-the bot uses one for ordinary chat and automatically swaps to a vision model
-only for the requests that actually carry an image:
+**Two models, routed per request.** The everyday model is text-only, so the bot
+automatically swaps to a vision model for the requests that actually carry an
+image:
 
 | | Model | Cost |
 | --- | --- | --- |
 | Everyday chat | `deepseek/deepseek-v4-flash-0731` | $0.09/M in, $0.18/M out |
-| Messages with images | `qwen/qwen3.6-27b` | ~$0.29/M in |
+| Messages with images | `qwen/qwen3.7-flash` | $0.03/M in, $0.13/M out |
 
-Override either with `LLM_MODEL` / `LLM_VISION_MODEL`. Providers whose main
-model is already multimodal (Gemini, OpenAI) set both to the same ID, making
-the routing a no-op.
+Both have 1M context. Override either with `LLM_MODEL` / `LLM_VISION_MODEL`.
+Providers whose main model is already multimodal (Gemini, OpenAI) set both to
+the same ID, making the routing a no-op.
 
 ## Commands
 
