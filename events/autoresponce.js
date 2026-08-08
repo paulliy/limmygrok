@@ -2,32 +2,13 @@ const { resolveConfig } = require('../utils/config');
 const { parseimgs, resolveImageUrlsToBase64 } = require('../utils/parseimgs');
 const { safeError, debugLog } = require('../utils/log');
 const { requestChatCompletion, describeLlmError, pickModel } = require('../utils/llm');
-const { buildReplyContext } = require('../utils/prompt');
+const { buildReplyContext, conversationText } = require('../utils/prompt');
 const { applyServerVoice, samplingParamsFor } = require('../utils/voice');
 const { pickGarnishGif } = require('../utils/media');
 const { recordEvent } = require('../utils/stats');
 const { createStreamAnimator, stripThinkAndCitations, withGarnish, INITIAL_LOADING_TEXT } = require('../utils/streamingReply');
 
 const fallbackConfig = resolveConfig() || {};
-
-// Flattens recent turns into one string for retrieval. Precedent should be
-// pulled against what the channel is actually talking about right now, not
-// just the single message that happened to trip the counter.
-function conversationText(messages, limit = 6) {
-    return messages
-        .slice(-limit)
-        .map((msg) => {
-            if (typeof msg.content === 'string') return msg.content;
-            if (Array.isArray(msg.content)) {
-                return msg.content
-                    .filter((part) => part && part.type === 'text')
-                    .map((part) => part.text)
-                    .join(' ');
-            }
-            return '';
-        })
-        .join('\n');
-}
 
 async function generateAutoresponce(message) {
     if (message.author.bot) return;

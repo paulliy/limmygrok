@@ -29,6 +29,10 @@ Every reply's system prompt is assembled fresh by **`buildReplyContext`** (in `u
 3. **Exemplars** (`styleExemplars`) — bare server messages near the typical length, one per author, shown with no author prefix. These teach *form*; precedent teaches *content*. Keep the two distinct.
 4. **Precedent** — real server messages retrieved for the current topic via **SQLite FTS5** (`corpus_fts`, external-content table kept in sync by triggers). Falls back to recent messages when nothing matches.
 
+`retrieveSimilar` (`utils/corpus.js`) does more than a bare FTS5 query, because plain BM25 has a real failure mode: an OR query across up to 8 terms lets a message sharing only the single rarest word outrank one that's actually about the whole question (BM25 rewards rarity, not coverage). It pulls a wider pool (`limit * poolMultiplier`), **re-ranks by distinct query-term overlap first, BM25 only as the tiebreaker**, then collapses near-identical reposts of the same catchphrase so limited precedent slots aren't spent twice on one line. A hit that's short or opens on a pronoun (`needsPrecedingContext`) carries the message it followed — the same "what is this reacting to" pattern `utils/media.js` uses for GIFs — so "he never opens correctly" doesn't get quoted floating with no antecedent. `renderPrecedent` (`utils/prompt.js`) tags each line with its age (`relativeAge`) so the model can resolve two lines that disagree, and flags when every retrieved hit traces back to one person (`distinctSources`) — one account, not the server's corroborated view.
+
+Retrieval queries the last few conversation turns, not just the triggering message (`conversationText`, shared by `mention.js`/`autoresponce.js`/media-garnish selection) — a pronoun-only question like "what does he think" carries no retrievable signal on its own.
+
 ### The prompt asks; `utils/voice.js` enforces
 
 A prompt is a request. A model obeys "type in lowercase, keep it short" for a sentence or two and then drifts back to its trained register — which is exactly the drift a Markov chain cannot have. `applyServerVoice` closes that gap deterministically on the way out, using the same measured profile:

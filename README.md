@@ -45,6 +45,14 @@ Concretely, every reply is built from four layers:
 With an empty corpus only layer 1 is sent, and the bot behaves like an ordinary
 chat model. Nothing breaks; it just has nothing to imitate yet.
 
+Retrieval is more than a bare keyword search: it re-ranks results by how many
+distinct words of the question a message actually matches (not just relevance
+to a single rare word), collapses near-identical reposts, tags each result
+with its age so the model can tell which of two disagreeing lines is current,
+and carries the message a short or pronoun-led reply ("he never opens
+correctly") was following — otherwise a quoted fragment can misattribute who
+it was actually about.
+
 ### Asking isn't enough
 
 A prompt is a request. A model will follow "type in lowercase, keep it short"
@@ -204,7 +212,7 @@ provider's own dashboard/API for a training opt-out or retention setting.
 ## Development
 
 ```bash
-bun test                          # 212 tests
+bun test                          # 224 tests
 bun test tests/corpusLearning.test.js
 bun run dashboard                 # local usage dashboard (dev only)
 ```

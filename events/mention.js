@@ -3,7 +3,7 @@ const { resolveConfig } = require('../utils/config');
 const { parseimgs, resolveImageUrlsToBase64 } = require('../utils/parseimgs');
 const { safeLog, safeError, debugLog } = require('../utils/log');
 const { requestChatCompletion, describeLlmError, pickModel } = require('../utils/llm');
-const { buildReplyContext } = require('../utils/prompt');
+const { buildReplyContext, conversationText } = require('../utils/prompt');
 const { applyServerVoice, samplingParamsFor } = require('../utils/voice');
 const { recordMessage } = require('../utils/corpus');
 const { pickGarnishGif } = require('../utils/media');
@@ -162,10 +162,19 @@ module.exports = {
 
             // The learned server dialect + precedent retrieved for whatever was
             // just said. This is what makes the reply sound like the server.
+            //
+            // Retrieval runs on the last few turns, not just the current
+            // message: "what does he think about that" carries no retrievable
+            // signal on its own — the turns just before it are usually what
+            // name who "he" is. Falls back to the bare message when there's no
+            // conversation yet to draw on (e.g. the very first message in a
+            // channel, or an image-only turn with no text of its own).
+            const retrievalQuery = conversationText(baseMessages) || messageContent;
+
             const { systemPrompt, profile } = buildReplyContext({
                 db: client.db,
                 guildId: message.guildId,
-                queryText: messageContent,
+                queryText: retrievalQuery,
             });
 
             debugLog('[MENTION] system prompt:', systemPrompt);
@@ -220,7 +229,7 @@ module.exports = {
             // Occasionally garnish with a GIF this server actually posts in
             // situations like this. Rare by design (see utils/media.js) — the
             // whole point is that it lands as a reaction, not a tic.
-            const garnish = pickGarnishGif(client.db, message.guildId, messageContent, {
+            const garnish = pickGarnishGif(client.db, message.guildId, retrievalQuery, {
                 channelId: message.channel.id,
                 cooldowns: client.mediaCooldowns,
             });

@@ -22,7 +22,16 @@ const {
     isLearnable,
     normalizeForLearning,
 } = require('../utils/corpus');
-const { buildSystemPrompt, renderDialectBlock, describeStyle, BASE_SYSTEM_PROMPT } = require('../utils/prompt');
+const {
+    buildSystemPrompt,
+    buildReplyContext,
+    renderDialectBlock,
+    renderPrecedent,
+    conversationText,
+    describeStyle,
+    relativeAge,
+    BASE_SYSTEM_PROMPT,
+} = require('../utils/prompt');
 
 function tempDb() {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'limmygrok-corpus-'));
@@ -292,4 +301,149 @@ test('buildSystemPrompt degrades to the base persona with no corpus or no db', (
 test('renderDialectBlock is empty when there is nothing learned', () => {
     assert.equal(renderDialectBlock(null), '');
     assert.equal(renderDialectBlock({ sampleSize: 0, vocabulary: [], phrases: [], style: null }), '');
+});
+
+// --- retrieval quality: term-overlap re-ranking, dedup, context, recency ----
+
+test('retrieval prefers a message matching more of the question over a single rare-word coincidence', () => {
+    const db = tempDb();
+    seed(db, [
+        // Shares only "weather" with the query below — a lucky single-term hit.
+        ['a', 'the weather today is oddly nice for once around here'],
+        // Shares several distinct query terms — actually about the question.
+        ['b', 'bawberry always whiffs the opening duel every single game'],
+    ]);
+
+    const hits = retrieveSimilar(db, 'g1', 'bawberry whiffs the opening duel weather');
+    assert.match(hits[0].content, /whiffs the opening duel/, 'broader overlap should outrank a coincidental rare-term match');
+    db.close();
+});
+
+test('near-identical reposts of the same line are collapsed to one precedent slot', () => {
+    const db = tempDb();
+    seed(db, [
+        ['a', 'holding site again lads'],
+        ['b', 'holding site again lads'],
+        ['c', 'holding site again LADS'],
+        ['d', 'deadlotting in ranked queue tonight'],
+    ]);
+
+    const hits = retrieveSimilar(db, 'g1', 'holding site lads deadlotting queue');
+    const holdingSiteHits = hits.filter((h) => /holding site/.test(h.content));
+    assert.equal(holdingSiteHits.length, 1, 'the repeated line should only take one slot, leaving room for other precedent');
+    db.close();
+});
+
+test('a short or pronoun-led hit carries the message it followed', () => {
+    const db = tempDb();
+    seed(db, [
+        ['limmy', 'bawberry never opens correctly on this map'],
+        ['gene', 'he never opens correctly either honestly'],
+    ]);
+
+    const hits = retrieveSimilar(db, 'g1', 'does he ever open correctly');
+    const pronounHit = hits.find((h) => h.content.startsWith('he '));
+    assert.ok(pronounHit, 'expected the pronoun-led message to be retrieved');
+    assert.equal(pronounHit.precedingAuthor, 'limmy');
+    assert.match(pronounHit.precedingContent, /bawberry never opens/);
+    db.close();
+});
+
+test('a self-contained hit does not carry preceding context it does not need', () => {
+    const db = tempDb();
+    seed(db, [
+        ['limmy', 'unrelated setup message about something else entirely'],
+        ['gene', 'bawberry consistently whiffs the opening duel in every single ranked match'],
+    ]);
+
+    const hits = retrieveSimilar(db, 'g1', 'bawberry whiffs the opening duel');
+    const hit = hits.find((h) => h.content.includes('bawberry consistently whiffs'));
+    assert.equal(hit.precedingContent, undefined, 'a long, self-contained message should not need borrowed context');
+    db.close();
+});
+
+test('retrieval degrades safely when there is nothing to attach context to', () => {
+    const db = tempDb();
+    // A pronoun-led hit with nothing before it in the channel.
+    seed(db, [['gene', 'he whiffed again honestly unbelievable']]);
+    const hits = retrieveSimilar(db, 'g1', 'did he whiff whiffed again');
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0].precedingContent, undefined);
+    db.close();
+});
+
+// --- renderPrecedent: recency, context, corroboration -----------------------
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+test('relativeAge reads naturally across the scale', () => {
+    const now = Date.now();
+    assert.equal(relativeAge(now), 'today');
+    assert.equal(relativeAge(now - DAY_MS), '1d ago');
+    assert.equal(relativeAge(now - 5 * DAY_MS), '5d ago');
+    assert.equal(relativeAge(now - 60 * DAY_MS), '2mo ago');
+    assert.equal(relativeAge(now - 400 * DAY_MS), '1y ago');
+    assert.equal(relativeAge(null), '');
+});
+
+test('renderPrecedent tags each line with its age and inline context', () => {
+    const rows = [
+        { author: 'gene', userId: 'gene', content: 'he never opens correctly', ts: Date.now(), precedingAuthor: 'limmy', precedingContent: 'bawberry never opens correctly' },
+        { author: 'limmy', userId: 'limmy', content: 'bawberry never opens correctly', ts: Date.now() - DAY_MS },
+    ];
+    const rendered = renderPrecedent(rows, { heading: 'SERVER PRECEDENT:' });
+
+    assert.match(rendered, /gene: he never opens correctly \(today\) \[replying to limmy: "bawberry never opens correctly"\]/);
+    assert.match(rendered, /limmy: bawberry never opens correctly \(1d ago\)/);
+});
+
+test('renderPrecedent flags a claim sourced from only one person', () => {
+    const single = [
+        { author: 'solo', userId: 'solo', content: 'deadlot is actually good trust me', ts: Date.now() },
+    ];
+    assert.match(renderPrecedent(single, { heading: 'SERVER PRECEDENT:' }), /all from the same person/);
+
+    const corroborated = [
+        { author: 'a', userId: 'a', content: 'deadlot is actually good', ts: Date.now() },
+        { author: 'b', userId: 'b', content: 'yeah deadlot is solid', ts: Date.now() },
+    ];
+    assert.equal(renderPrecedent(corroborated, { heading: 'SERVER PRECEDENT:' }).includes('all from the same person'), false);
+});
+
+test('renderPrecedent falls back to author when userId is absent, without crashing', () => {
+    const rows = [{ author: 'solo', content: 'x', ts: Date.now() }];
+    assert.doesNotThrow(() => renderPrecedent(rows, { heading: 'H:' }));
+});
+
+// --- buildReplyContext: anti-fabrication instruction -------------------------
+
+test('buildReplyContext instructs the model not to invent facts beyond precedent', () => {
+    const db = tempDb();
+    seed(db, Array.from({ length: 20 }, (_, i) => [`u${i % 3}`, 'bawberry is holding site again']));
+    const { systemPrompt } = buildReplyContext({ db, guildId: 'g1', queryText: 'bawberry' });
+    assert.match(systemPrompt, /say you don't know rather than making one up/i);
+    assert.match(systemPrompt, /trust the more recent line/i);
+    db.close();
+});
+
+// --- conversationText (shared helper) ----------------------------------------
+
+test('conversationText flattens both string and content-part turns', () => {
+    const messages = [
+        { role: 'user', content: 'plain string turn' },
+        { role: 'user', content: [{ type: 'text', text: 'part-based turn' }, { type: 'image_url', image_url: { url: 'x' } }] },
+    ];
+    const flattened = conversationText(messages);
+    assert.match(flattened, /plain string turn/);
+    assert.match(flattened, /part-based turn/);
+    assert.equal(flattened.includes('image_url'), false, 'image parts contribute nothing but should not throw');
+});
+
+test('conversationText respects the limit and handles empty input', () => {
+    const messages = Array.from({ length: 10 }, (_, i) => ({ role: 'user', content: `turn ${i}` }));
+    const flattened = conversationText(messages, 3);
+    assert.equal(flattened.includes('turn 6'), false);
+    assert.match(flattened, /turn 7/);
+    assert.match(flattened, /turn 9/);
+    assert.equal(conversationText([]), '');
 });

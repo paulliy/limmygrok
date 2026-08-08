@@ -416,22 +416,84 @@ function buildMatchQuery(text) {
     return unique.map((token) => `"${token.replace(/"/g, '""')}"`).join(' OR ');
 }
 
+// A hit whose own text is this short, or opens on a pronoun, is likely to
+// misattribute a fact once quoted in isolation: "he never opens correctly"
+// says nothing about who "he" is without what came before it.
+const LEADS_WITH_PRONOUN = /^\s*(he|him|his|she|her|hers|they|them|their|it|that|this|those|these|yeah|no|ye|nah)\b/i;
+function needsPrecedingContext(content, tokenCount) {
+    return tokenCount <= 4 || LEADS_WITH_PRONOUN.test(content);
+}
+
+// The message immediately before a hit, in the same channel — attached only
+// when the hit itself is too short or pronoun-led to stand alone. Cheap
+// (one indexed lookup per hit that needs it, and only a handful of hits ever
+// do) and it is exactly the "what is this reacting to" pattern
+// utils/media.js already relies on for GIFs.
+function fetchPrecedingMessage(db, guildId, channelId, ts) {
+    try {
+        return db.prepare(
+            'SELECT author, content FROM corpus_messages WHERE guild_id = ? AND channel_id = ? AND ts < ? ORDER BY ts DESC LIMIT 1'
+        ).get(guildId, channelId, ts) || null;
+    } catch (e) {
+        return null;
+    }
+}
+
 // Pulls the messages this server has actually written about the topic at
 // hand. This is the bot's memory of server lore: names, running jokes, what
 // happened last week — none of which any model was trained on.
-function retrieveSimilar(db, guildId, queryText, { limit = 6 } = {}) {
+//
+// Plain BM25 has a failure mode this corrects for: an OR query across up to
+// eight terms lets a message that shares only the single rarest word
+// outrank one that is actually about the whole question, because BM25
+// rewards term rarity over term coverage. So a wider pool is pulled and
+// re-ranked by how many distinct query terms each hit actually matches
+// first, BM25 only as the tiebreaker — then near-duplicate reposts of the
+// same catchphrase are collapsed so a handful of limited precedent slots
+// aren't spent twice on the same line.
+function retrieveSimilar(db, guildId, queryText, { limit = 6, poolMultiplier = 5 } = {}) {
     if (!db || !guildId) return [];
+    const queryTokens = new Set(tokenize(queryText).filter((token) => token.length >= 3 && !COMMON_WORDS.has(token)));
     const match = buildMatchQuery(queryText);
     if (!match) return [];
 
     try {
-        return db.prepare(`
-            SELECT m.author, m.content, m.ts
+        const pool = db.prepare(`
+            SELECT m.id, m.author, m.user_id, m.channel_id, m.content, m.ts, bm25(corpus_fts) AS bm25score
             FROM corpus_fts f
             JOIN corpus_messages m ON m.id = f.rowid
             WHERE corpus_fts MATCH ? AND m.guild_id = ?
             ORDER BY bm25(corpus_fts) LIMIT ?
-        `).all(match, guildId, limit);
+        `).all(match, guildId, limit * poolMultiplier);
+
+        const scored = pool.map((row) => {
+            const rowTokens = tokenize(row.content);
+            const overlap = rowTokens.filter((token) => queryTokens.has(token)).length;
+            return { ...row, overlap, tokenCount: rowTokens.length };
+        });
+        scored.sort((a, b) => b.overlap - a.overlap || a.bm25score - b.bm25score);
+
+        const seenContent = new Set();
+        const deduped = [];
+        for (const row of scored) {
+            const key = row.content.toLowerCase().replace(/\s+/g, ' ').trim();
+            if (seenContent.has(key)) continue;
+            seenContent.add(key);
+            deduped.push(row);
+            if (deduped.length >= limit) break;
+        }
+
+        return deduped.map((row) => {
+            const result = { author: row.author, content: row.content, ts: row.ts, userId: row.user_id };
+            if (needsPrecedingContext(row.content, row.tokenCount)) {
+                const preceding = fetchPrecedingMessage(db, guildId, row.channel_id, row.ts);
+                if (preceding) {
+                    result.precedingAuthor = preceding.author;
+                    result.precedingContent = preceding.content;
+                }
+            }
+            return result;
+        });
     } catch (e) {
         safeError('[CORPUS] Retrieval failed:', e);
         return [];

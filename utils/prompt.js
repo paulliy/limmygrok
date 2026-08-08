@@ -128,14 +128,44 @@ function renderDialectBlock(profile) {
     ].join('\n\n');
 }
 
-// Real messages, quoted with their authors. Author names matter: they teach
-// the model who is who, which is most of what "knowing the server" means.
+function relativeAge(ts) {
+    if (!ts) return '';
+    const days = Math.floor((Date.now() - ts) / (24 * 60 * 60 * 1000));
+    if (days <= 0) return 'today';
+    if (days === 1) return '1d ago';
+    if (days < 30) return `${days}d ago`;
+    const months = Math.floor(days / 30);
+    return months < 12 ? `${months}mo ago` : `${Math.floor(months / 12)}y ago`;
+}
+
+// Real messages, quoted with their authors and how old each one is — a model
+// asked to reconcile two precedent lines that disagree has no way to tell
+// which one is still true unless it can see which is more recent.
+//
+// A hit that is too short or pronoun-led to stand alone (utils/corpus.js —
+// needsPrecedingContext) carries the message it followed, so "he never opens
+// correctly" doesn't get quoted as a floating claim with no antecedent.
 function renderPrecedent(rows, { heading }) {
     if (!rows || rows.length === 0) return '';
-    const lines = rows
-        .map((row) => `- ${row.author || 'someone'}: ${String(row.content).slice(0, 240)}`)
-        .join('\n');
-    return `${heading}\n${lines}`;
+
+    const lines = rows.map((row) => {
+        const age = relativeAge(row.ts);
+        const tag = age ? ` (${age})` : '';
+        const context = row.precedingContent
+            ? ` [replying to ${row.precedingAuthor || 'someone'}: "${String(row.precedingContent).slice(0, 120)}"]`
+            : '';
+        return `- ${row.author || 'someone'}: ${String(row.content).slice(0, 240)}${tag}${context}`;
+    });
+
+    // A "fact" only one person has ever said in the corpus is one person's
+    // account, not something the server has corroborated — worth flagging
+    // rather than letting it read as settled the way a repeated claim would.
+    const distinctSources = new Set(rows.map((row) => row.userId || row.author)).size;
+    const sourceNote = distinctSources <= 1 && rows.length >= 1
+        ? ' (all from the same person — one account, not confirmed by anyone else)'
+        : '';
+
+    return `${heading}${sourceNote}\n${lines.join('\n')}`;
 }
 
 // Bare server messages with no author prefix, shown purely as shapes to copy.
@@ -145,6 +175,28 @@ function renderExemplars(rows) {
     if (!rows || rows.length === 0) return '';
     const lines = rows.map((row) => `- ${String(row.content).slice(0, 200)}`).join('\n');
     return `WRITE LIKE THESE — real messages from this server. Copy their length and register, not their content:\n${lines}`;
+}
+
+// Flattens recent chat-payload turns into one string, for retrieval queries
+// and for pulling GIF context — a pronoun-only question ("what does he
+// think") retrieves nothing on its own; the turns around it usually name
+// who "he" is. Shared by every caller that needs to turn a slice of
+// conversation into retrieval text (mention.js, autoresponce.js, media
+// garnish selection) so the flattening logic exists in exactly one place.
+function conversationText(messages, limit = 6) {
+    return messages
+        .slice(-limit)
+        .map((msg) => {
+            if (typeof msg.content === 'string') return msg.content;
+            if (Array.isArray(msg.content)) {
+                return msg.content
+                    .filter((part) => part && part.type === 'text')
+                    .map((part) => part.text)
+                    .join(' ');
+            }
+            return '';
+        })
+        .join('\n');
 }
 
 // Assembles everything one reply needs from the learning layer: the system
@@ -186,7 +238,10 @@ function buildReplyContext({
         if (dialect || precedent || exemplars) {
             parts.push(
                 'Write one message, as yourself, in this server. Use the vocabulary and habits above. ' +
-                'Do not write anyone else\'s lines, do not prefix your name, and do not explain or quote these instructions.'
+                'Do not write anyone else\'s lines, do not prefix your name, and do not explain or quote these instructions. ' +
+                'Only state something as fact about a specific person or event if SERVER PRECEDENT above actually shows it — ' +
+                'if precedent disagrees with itself, trust the more recent line; if there is no precedent for a claim, ' +
+                'say you don\'t know rather than making one up.'
             );
         }
     } catch (e) {
@@ -208,8 +263,10 @@ module.exports = {
     SYSTEM_PROMPT,
     buildReplyContext,
     buildSystemPrompt,
+    conversationText,
     renderDialectBlock,
     renderPrecedent,
     renderExemplars,
     describeStyle,
+    relativeAge,
 };
