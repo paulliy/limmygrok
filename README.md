@@ -212,7 +212,7 @@ provider's own dashboard/API for a training opt-out or retention setting.
 ## Development
 
 ```bash
-bun test                          # 224 tests
+bun test                          # 228 tests
 bun test tests/corpusLearning.test.js
 bun run dashboard                 # local usage dashboard (dev only)
 ```

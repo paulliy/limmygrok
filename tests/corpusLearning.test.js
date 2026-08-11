@@ -18,6 +18,7 @@ const {
     countMessages,
     forgetGuild,
     pruneCorpus,
+    guildCount,
     tokenize,
     isLearnable,
     normalizeForLearning,
@@ -446,4 +447,62 @@ test('conversationText respects the limit and handles empty input', () => {
     assert.match(flattened, /turn 7/);
     assert.match(flattened, /turn 9/);
     assert.equal(conversationText([]), '');
+});
+
+// --- retrieval query shape: guild isolation + bounded work ------------------
+
+test('retrieval never leaks another guild\'s messages', () => {
+    const db = tempDb();
+    seed(db, Array.from({ length: 40 }, (_, i) => ['u1', `bawberry holding site number ${i}`]), { guildId: 'g1' });
+    seed(db, Array.from({ length: 40 }, (_, i) => ['u2', `bawberry holding site number ${i}`]), { guildId: 'g2' });
+
+    // Ranking happens inside FTS across every guild and the guild filter is
+    // applied to the survivors, so this is the invariant that matters most.
+    for (const guild of ['g1', 'g2']) {
+        const hits = retrieveSimilar(db, guild, 'bawberry holding site');
+        assert.ok(hits.length > 0, `expected hits for ${guild}`);
+        const authors = new Set(hits.map((h) => h.author));
+        assert.deepEqual([...authors], [guild === 'g1' ? 'u1' : 'u2'], `${guild} got another guild's messages`);
+    }
+    db.close();
+});
+
+test('the precedent pool still fills when several guilds share the corpus', () => {
+    const db = tempDb();
+    // Three guilds saying near-identical things: without widening the ranked
+    // pool, the other two would crowd this guild out of the top-N entirely.
+    for (const guild of ['g1', 'g2', 'g3']) {
+        seed(db, Array.from({ length: 60 }, (_, i) => [`u-${guild}`, `bawberry holding site again ${i}`]), { guildId: guild });
+    }
+
+    const hits = retrieveSimilar(db, 'g2', 'bawberry holding site again', { limit: 6 });
+    assert.equal(hits.length, 6, 'should still fill all six precedent slots');
+    db.close();
+});
+
+test('guildCount reports how many guilds have been learned from', () => {
+    const db = tempDb();
+    assert.equal(guildCount(db), 1, 'an empty corpus should not report zero and break pool sizing');
+    seed(db, [['u1', 'bawberry holding site']], { guildId: 'g1' });
+    seed(db, [['u2', 'bawberry holding site']], { guildId: 'g2' });
+    assert.equal(guildCount(db), 2);
+    db.close();
+});
+
+// Retrieval used to join every matching row before sorting, so a query term
+// that appeared in most messages cost time proportional to the whole corpus
+// (measured: 225 ms at 1,200 messages, and superlinear from there). Ranking
+// inside FTS first brought that to ~1.7 ms. The bound below is deliberately
+// enormous — this is here to catch the query shape being reverted, not to
+// measure performance, so it must not turn flaky on a loaded CI box.
+test('retrieval stays fast when a query term matches almost the whole corpus', () => {
+    const db = tempDb();
+    seed(db, Array.from({ length: 3000 }, (_, i) => [`u${i % 6}`, 'holding site lads queue again']));
+
+    const started = Date.now();
+    for (let i = 0; i < 5; i++) retrieveSimilar(db, 'g1', 'holding site lads queue');
+    const perCall = (Date.now() - started) / 5;
+
+    assert.ok(perCall < 400, `retrieval took ${perCall.toFixed(0)}ms/call — the join is probably happening before the sort again`);
+    db.close();
 });

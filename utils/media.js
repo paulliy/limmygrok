@@ -16,7 +16,7 @@
 // embed itself — so nothing is ever re-uploaded or stored beyond the link.
 
 const { safeError } = require('./log');
-const { tokenize, normalizeForLearning } = require('./corpus');
+const { tokenize, normalizeForLearning, guildCount } = require('./corpus');
 const { COMMON_WORDS } = require('./commonWords');
 
 // Hosts whose links Discord renders as an image or looping GIF embed. A link
@@ -189,20 +189,34 @@ function buildMatchQuery(text) {
 
 // Finds GIFs this server posts in situations like the one at hand. Ranked by
 // text match first, then by how established the GIF is.
+//
+// Same rank-inside-FTS-then-join shape as retrieveSimilar in utils/corpus.js,
+// and for the same reason — joining before the sort makes cost scale with
+// everything that matched rather than with what is returned. This table is
+// far smaller (one row per distinct URL, not per post), so the effect is
+// milder here, but the pathology is identical and there is no reason to keep
+// the slow phrasing. The guild and uses filters move outside the ranked
+// subquery, so the pool is widened to leave room for them.
 function findMatchingMedia(db, guildId, queryText, { limit = 3, minUses = MIN_USES_TO_REUSE } = {}) {
     if (!db || !guildId) return [];
     const match = buildMatchQuery(queryText);
     if (!match) return [];
 
     try {
+        const poolLimit = Math.min(limit * 10 * guildCount(db), 300);
         return db.prepare(`
-            SELECT m.url, m.kind, m.uses, bm25(corpus_media_fts) AS score
-            FROM corpus_media_fts f
-            JOIN corpus_media m ON m.id = f.rowid
-            WHERE corpus_media_fts MATCH ? AND m.guild_id = ? AND m.uses >= ?
-            ORDER BY score, m.uses DESC
+            SELECT m.url, m.kind, m.uses, f.score
+            FROM (
+                SELECT rowid AS rid, bm25(corpus_media_fts) AS score
+                FROM corpus_media_fts
+                WHERE corpus_media_fts MATCH ?
+                ORDER BY bm25(corpus_media_fts) LIMIT ?
+            ) f
+            JOIN corpus_media m ON m.id = f.rid
+            WHERE m.guild_id = ? AND m.uses >= ?
+            ORDER BY f.score, m.uses DESC
             LIMIT ?
-        `).all(match, guildId, minUses, limit);
+        `).all(match, poolLimit, guildId, minUses, limit);
     } catch (e) {
         safeError('[MEDIA] Media retrieval failed:', e);
         return [];
