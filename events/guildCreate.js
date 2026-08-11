@@ -1,5 +1,5 @@
 const { Events, PermissionFlagsBits, ChannelType } = require('discord.js');
-const { safeLog, safeError } = require('../utils/parseimgs');
+const { safeLog, safeError } = require('../utils/log');
 
 const ONBOARDING_MESSAGE =
     '👋 Thanks for adding me!\n\n' +

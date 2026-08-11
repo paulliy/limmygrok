@@ -24,7 +24,7 @@ async function generateAutoresponce(message) {
 
     await message.channel.sendTyping();
 
-    const llm = client.llm || client.openWebUI;
+    const llm = client.llm;
     const llmConfig = client.config || fallbackConfig;
 
     let replyMessage;

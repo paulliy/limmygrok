@@ -20,7 +20,7 @@ module.exports = {
         await interaction.deferReply();
         const userInput = interaction.options.getString('input');
         const client = interaction.client;
-        const llm = client.llm || client.openWebUI;
+        const llm = client.llm;
         const llmConfig = client.config || fallbackConfig;
         let animator;
 

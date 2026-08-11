@@ -12,7 +12,7 @@ const { OpenAI } = require('openai');
 // Deliberately utils/log.js and not utils/parseimgs.js: parseimgs re-exports
 // this module, so importing it back would be a require cycle and the logging
 // helpers would arrive undefined.
-const { safeLog, safeError } = require('./log');
+const { safeLog } = require('./log');
 
 // OpenRouter attributes usage to an app via HTTP-Referer (the identifier) and
 // X-Title (the display name). Both are optional; sending them just means the
@@ -205,20 +205,13 @@ async function requestChatCompletion(client, payload, { requestOptions, maxAttem
     throw lastError;
 }
 
-// Back-compat shim for the previous name/signature.
-async function createChatCompletionWithFallback(client, payload, requestOptions) {
-    return requestChatCompletion(client, payload, { requestOptions });
-}
-
 module.exports = {
     createLlmClient,
     pickModel,
     messagesContainImages,
     privacyProviderOptions,
     requestChatCompletion,
-    createChatCompletionWithFallback,
     describeLlmError,
     isRetryable,
     providerHeaders,
-    safeError,
 };

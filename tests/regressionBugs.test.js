@@ -54,7 +54,7 @@ function createCapturingMessage({
     memory = new Map(),
     messageCounts = new Map(),
     cooldowns = new Map(),
-    openWebUI = null,
+    llm = null,
     mentions = null,
     attachments = [],
     replyThrows = false,
@@ -71,7 +71,7 @@ function createCapturingMessage({
             memory,
             messageCounts,
             cooldowns,
-            openWebUI,
+            llm,
             user: { id: 'bot-123', username: 'limmybot' },
         },
         attachments: new Map(attachments.map((att, i) => [`att-${i}`, att])),
@@ -113,7 +113,7 @@ test('regression: a long auto-response is never edited past Discord\'s 2000-char
     const { message, replyEdits } = createCapturingMessage({
         channelId: 'ch-1',
         memory,
-        openWebUI: streamingOpenAI(longReply),
+        llm: streamingOpenAI(longReply),
     });
 
     await autoresponce.generateAutoresponce(message);
@@ -154,7 +154,7 @@ test('regression: generateAutoresponce swallows a failing initial reply instead 
     const { message } = createCapturingMessage({
         channelId: 'ch-1',
         memory,
-        openWebUI: streamingOpenAI('never gets here'),
+        llm: streamingOpenAI('never gets here'),
         replyThrows: true,
     });
 
@@ -178,7 +178,7 @@ test('regression: mention dedup must not drop an unrelated prior message that me
         content: '<@bot-123> what time is it',
         channelId: 'ch-1',
         memory,
-        openWebUI: streamingOpenAI('it is noon'),
+        llm: streamingOpenAI('it is noon'),
         mentions,
     });
 

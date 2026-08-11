@@ -70,9 +70,6 @@ statsPruneInterval.unref?.();
 const llm = createLlmClient(config);
 client.llm = llm;
 client.config = config;
-// Back-compat alias: handlers written against the old OpenWebUI backend still
-// reach the same client through this name.
-client.openWebUI = llm;
 
 safeLog(`[BOOT] LLM provider: ${describeProvider(config)} — model ${config.MODEL_NAME}`);
 

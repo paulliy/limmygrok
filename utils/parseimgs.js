@@ -2,13 +2,13 @@
 
 // Discord message -> OpenAI chat-payload conversion, plus the image pipeline.
 //
-// Logging helpers (safeLog/safeError) now live in utils/log.js and the chat
-// request wrapper in utils/llm.js; both are re-exported from here so existing
-// imports keep working.
+// Scope is deliberately narrow: this module turns Discord messages into the
+// OpenAI `messages` shape and inlines images. Logging lives in utils/log.js,
+// the request wrapper in utils/llm.js, and the persona in utils/prompt.js —
+// import those directly rather than through here.
 
 const dns = require('dns').promises;
-const { safeLog, safeError, debugLog } = require('./log');
-const { BASE_SYSTEM_PROMPT, SYSTEM_PROMPT } = require('./prompt');
+const { safeError } = require('./log');
 
 const URL_REGEX = /https?:\/\/[^\s]+/gi;
 const IMAGE_MIME_TYPES_BY_EXTENSION = {
@@ -399,12 +399,6 @@ function parseimgs(messages) {
     return merged;
 }
 
-// Re-exported for back-compat with the handlers that used to import the chat
-// wrapper from here. Safe because utils/llm.js depends on utils/log.js rather
-// than on this module — if it ever imports this file back, these become
-// undefined at runtime.
-const { createChatCompletionWithFallback, requestChatCompletion } = require('./llm');
-
 module.exports = {
     isImageUrl,
     parseTextAndImages,
@@ -412,11 +406,4 @@ module.exports = {
     parseDiscordMessage,
     parseimgs,
     resolveImageUrlsToBase64,
-    safeLog,
-    safeError,
-    debugLog,
-    createChatCompletionWithFallback,
-    requestChatCompletion,
-    BASE_SYSTEM_PROMPT,
-    SYSTEM_PROMPT
 };

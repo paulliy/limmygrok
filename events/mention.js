@@ -1,7 +1,7 @@
 const { Events, Collection } = require('discord.js');
 const { resolveConfig } = require('../utils/config');
 const { parseimgs, resolveImageUrlsToBase64 } = require('../utils/parseimgs');
-const { safeLog, safeError, debugLog } = require('../utils/log');
+const { safeError, debugLog } = require('../utils/log');
 const { requestChatCompletion, describeLlmError, pickModel } = require('../utils/llm');
 const { buildReplyContext, conversationText } = require('../utils/prompt');
 const { applyServerVoice, samplingParamsFor } = require('../utils/voice');
@@ -69,7 +69,7 @@ module.exports = {
         }
 
         const client = message.client;
-        const llm = client.llm || client.openWebUI;
+        const llm = client.llm;
         const llmConfig = client.config || fallbackConfig;
 
         await message.channel.sendTyping();

@@ -84,10 +84,17 @@ Both listeners must agree on `isDirectlyAddressed`, or you get a double reply or
 
 `events/autoResponseState.js` and `events/channelSettings.js` are **helper modules that live in `events/` but export no `name`/`execute`** — `index.js` skips them during event registration, and `tests/repoStructure.test.js` has a hardcoded allowlist of them. **Prefer putting new shared logic in `utils/`** rather than adding to that list.
 
-### Module layout & the require cycle to avoid
-`utils/log.js` (secret-scrubbing `safeLog`/`safeError`/`debugLog`) is the base of the dependency graph — it depends only on `utils/config.js`. `utils/llm.js` and `utils/corpus.js` import from it directly.
+### Module layout
+`utils/log.js` (secret-scrubbing `safeLog`/`safeError`/`debugLog`) is the base of the dependency graph — it depends only on `utils/config.js`. Everything that logs imports it **directly**.
 
-**`utils/parseimgs.js` re-exports `safeLog`, `safeError` and `createChatCompletionWithFallback` for back-compat, so anything imported by `parseimgs.js` must never import `parseimgs.js` back.** Importing `./parseimgs` from `llm.js` yields `undefined` helpers at runtime — a cycle that type-checks fine and fails only when the code path executes.
+Each module has one job and is imported for that job only:
+- `utils/log.js` — logging. Never `console.*` anywhere else.
+- `utils/config.js` — config resolution + provider presets.
+- `utils/llm.js` — the client, model routing, the request wrapper, provider errors.
+- `utils/parseimgs.js` — Discord message → OpenAI `messages` shape, plus the image pipeline. Depends only on `dns` and `utils/log.js`.
+- `utils/prompt.js` — persona + prompt assembly.
+
+`parseimgs.js` used to re-export logging, the chat wrapper and the persona for back-compat, which meant importing it dragged in the corpus/prompt/LLM stack and created a live require-cycle hazard (`llm.js` importing `./parseimgs` back yielded `undefined` helpers at runtime). Those re-exports are gone — **don't reintroduce them.** Import from the owning module.
 
 ### The LLM/image pipeline (`utils/parseimgs.js`)
 - **`safeLog` / `safeError`**: deep-scrub `token` and `APIkey` (resolved from env *or* config) out of all output including Error stacks. **Always use these, never raw `console.*`.** Use **`debugLog`** for verbose payload/memory dumps — gated behind `DEBUG_PAYLOADS=1`, off by default so a shared VM's journal isn't a copy of everyone's chat.
@@ -100,7 +107,7 @@ Every request sent to OpenRouter carries `provider: { data_collection: 'deny', z
 ### LLM access (`utils/llm.js`)
 - **`pickModel(config, messages)`**: the bot configures **two** models. `MODEL_NAME` is text-only and chosen for speed/price; `VISION_MODEL` is swapped in per request, and only when `messagesContainImages` finds an actual `image_url` part. Don't collapse these — a text-only everyday model is the point, and paying multimodal rates on every one-liner is what it avoids. Providers that are natively multimodal set both preset fields to the same ID.
 - **`createLlmClient(config)`**: builds the `OpenAI` client. Adds OpenRouter's `HTTP-Referer`/`X-Title` attribution headers only for that provider. SDK retries are disabled in favour of the wrapper's own.
-- **`requestChatCompletion`**: retries 429/5xx/network errors with `Retry-After`-aware backoff, and falls back to non-streaming on 404/405/streaming errors. Returns `{isStream, stream}` or `{isStream:false, response}` — callers branch on `isStream`. `createChatCompletionWithFallback` is the old name, kept as a shim.
+- **`requestChatCompletion`**: retries 429/5xx/network errors with `Retry-After`-aware backoff, and falls back to non-streaming on 404/405/streaming errors. Returns `{isStream, stream}` or `{isStream:false, response}` — callers branch on `isStream`. Pass `{ config }` so the privacy fields above are applied.
 - **`describeLlmError`**: turns a provider error into one user-facing sentence. Reply paths show this instead of raw `error.message` (which is often a wall of JSON). The OpenRouter 429 case names the free-tier daily cap, because that is what it almost always is.
 
 ### Streaming reply convention

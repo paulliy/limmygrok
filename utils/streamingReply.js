@@ -1,6 +1,6 @@
 'use strict';
 
-const { safeError } = require('./parseimgs');
+const { safeError } = require('./log');
 
 // Union of the two loadingPhrases lists that had diverged between
 // mention.js and autoresponce.js.
