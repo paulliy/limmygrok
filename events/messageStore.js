@@ -1,7 +1,7 @@
 const { Events } = require('discord.js');
 const { generateAutoresponce } = require('./autoresponce');
-const { getAutoResponseRate, resetAutoResponseCount } = require('./autoResponseState');
-const { isChannelAllowed } = require('./channelSettings');
+const { getAutoResponseRate, resetAutoResponseCount } = require('../utils/autoResponseState');
+const { isChannelAllowed } = require('../utils/channelSettings');
 const { parseimgs } = require('../utils/parseimgs');
 const { safeError, debugLog } = require('../utils/log');
 const { isDirectlyAddressed } = require('../utils/triggers');

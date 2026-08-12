@@ -98,8 +98,10 @@ for (const file of eventFiles) {
 	const hasName = Boolean(event.name);
 	const hasExecute = typeof event.execute === 'function';
 	if (!hasName && !hasExecute) {
-		// Shared helper module that happens to live in events/ (e.g. autoResponseState),
-		// not an event handler. Skip silently.
+		// A module in events/ that is not itself a gateway handler — e.g.
+		// autoresponce.js, which messageStore.js invokes directly. Exporting
+		// neither name nor execute is how it opts out; exporting only one of
+		// them is a mistake, and is warned about below.
 		continue;
 	}
 	if (!hasName || !hasExecute) {

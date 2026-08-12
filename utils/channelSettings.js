@@ -1,7 +1,6 @@
 'use strict';
 
-// Per-channel visibility settings (a helper module, not an event handler — it
-// exports no `name`/`execute`, mirroring events/autoResponseState.js).
+// Per-channel visibility settings.
 //
 // `client.allowedChannels` is a channelId -> guildId store. It is an OPT-IN
 // allowlist for AMBIENT auto-responses only: a channel must be added before the

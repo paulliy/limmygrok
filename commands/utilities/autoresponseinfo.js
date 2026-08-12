@@ -2,7 +2,7 @@ const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const {
     getAutoResponseRate,
     getMessagesUntilNextAutoResponse,
-} = require('../../events/autoResponseState');
+} = require('../../utils/autoResponseState');
 
 module.exports = {
     data: new SlashCommandBuilder()

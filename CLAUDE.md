@@ -93,7 +93,9 @@ Both fire on every message; they divide ownership via `utils/triggers.js` to avo
 
 Both listeners must agree on `isDirectlyAddressed`, or you get a double reply or silence.
 
-`events/autoResponseState.js` and `events/channelSettings.js` are **helper modules that live in `events/` but export no `name`/`execute`** — `index.js` skips them during event registration, and `tests/repoStructure.test.js` has a hardcoded allowlist of them. **Prefer putting new shared logic in `utils/`** rather than adding to that list.
+**`events/` holds gateway handlers; shared logic goes in `utils/`.** The per-channel rate and allowlist stores live in `utils/autoResponseState.js` and `utils/channelSettings.js` — they were in `events/` and were imported from commands and tests that have nothing to do with the gateway.
+
+`events/autoresponce.js` is the one module there that isn't a handler: it's the ambient trigger's own logic, invoked directly by `messageStore.js`. It opts out of registration by exporting neither `name` nor `execute`. Exporting exactly one of them is a mistake — `index.js` skips it with a warning, and `tests/repoStructure.test.js` asserts both-or-neither structurally rather than keeping a list of filenames allowed to be helpers.
 
 ### Module layout
 `utils/log.js` (secret-scrubbing `safeLog`/`safeError`/`debugLog`) is the base of the dependency graph — it depends only on `utils/config.js`. Everything that logs imports it **directly**.

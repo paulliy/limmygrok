@@ -63,7 +63,7 @@ require.cache[require.resolve('discord.js')] = {
 const messageStore = require('../events/messageStore');
 const mention = require('../events/mention');
 const channelsCommand = require('../commands/utilities/channels');
-const { isChannelAllowed } = require('../events/channelSettings');
+const { isChannelAllowed } = require('../utils/channelSettings');
 
 function streamingOpenAI() {
     return {

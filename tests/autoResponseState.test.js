@@ -6,7 +6,7 @@ const {
   setAutoResponseRate,
   getMessagesUntilNextAutoResponse,
   resetAutoResponseCount,
-} = require('../events/autoResponseState');
+} = require('../utils/autoResponseState');
 
 test('uses the default auto-response rate when no override exists', () => {
   const client = {};

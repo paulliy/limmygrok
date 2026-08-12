@@ -9,7 +9,7 @@ const {
     disallowChannel,
     listAllowedChannels,
     clearAllowedChannels,
-} = require('../../events/channelSettings');
+} = require('../../utils/channelSettings');
 const { backfillChannel } = require('../../utils/backfill');
 
 module.exports = {
