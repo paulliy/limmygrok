@@ -19,6 +19,9 @@ const {
     forgetGuild,
     pruneCorpus,
     guildCount,
+    RETRIEVE_SIMILAR_SQL,
+    styleExemplars,
+    selectExemplars,
     tokenize,
     isLearnable,
     normalizeForLearning,
@@ -490,19 +493,75 @@ test('guildCount reports how many guilds have been learned from', () => {
 });
 
 // Retrieval used to join every matching row before sorting, so a query term
-// that appeared in most messages cost time proportional to the whole corpus
+// appearing in most messages cost time proportional to the whole corpus
 // (measured: 225 ms at 1,200 messages, and superlinear from there). Ranking
-// inside FTS first brought that to ~1.7 ms. The bound below is deliberately
-// enormous — this is here to catch the query shape being reverted, not to
-// measure performance, so it must not turn flaky on a loaded CI box.
-test('retrieval stays fast when a query term matches almost the whole corpus', () => {
+// inside FTS first brought that to ~1.7 ms, and ~41 ms at the 50,000 cap.
+//
+// This asserts the query *plan* rather than elapsed time: a wall-clock bound
+// flakes on a loaded machine (it did), whereas the plan is deterministic and
+// says exactly what must stay true — the FTS ranking is materialised and
+// bounded as a CO-ROUTINE before the join, instead of the join being driven
+// from corpus_messages and sorted at the end.
+test('precedent retrieval ranks inside FTS before joining', () => {
     const db = tempDb();
-    seed(db, Array.from({ length: 3000 }, (_, i) => [`u${i % 6}`, 'holding site lads queue again']));
+    seed(db, Array.from({ length: 20 }, (_, i) => ['u1', `bawberry holding site ${i}`]));
 
-    const started = Date.now();
-    for (let i = 0; i < 5; i++) retrieveSimilar(db, 'g1', 'holding site lads queue');
-    const perCall = (Date.now() - started) / 5;
+    const plan = db.prepare(`EXPLAIN QUERY PLAN ${RETRIEVE_SIMILAR_SQL}`)
+        .all('"bawberry"', 30, 'g1')
+        .map((row) => row.detail)
+        .join('\n');
 
-    assert.ok(perCall < 400, `retrieval took ${perCall.toFixed(0)}ms/call — the join is probably happening before the sort again`);
+    assert.match(plan, /CO-ROUTINE/,
+        `the FTS ranking must be bounded before the join, got:\n${plan}`);
+    db.close();
+});
+
+// --- exemplars: computed with the profile, not per reply --------------------
+
+test('the profile carries exemplars, so replies need no extra query', () => {
+    const db = tempDb();
+    seed(db, [
+        ['u1', 'holding site again lads'],
+        ['u2', 'bawberry whiffed the opening duel once more tonight honestly'],
+        ['u3', 'deadlotting in ranked queue'],
+    ]);
+
+    const profile = getStyleProfile(db, 'g1', { force: true });
+    assert.ok(Array.isArray(profile.exemplars), 'exemplars should live on the profile');
+    assert.ok(profile.exemplars.length > 0);
+    assert.ok(profile.exemplars.every((e) => typeof e.content === 'string'));
+    db.close();
+});
+
+test('exemplars favour typical length and never repeat an author', () => {
+    const candidates = [
+        { content: 'ok', userId: 'a', words: 1 },
+        { content: 'this is about the average length here', userId: 'b', words: 7 },
+        { content: 'also roughly average length message', userId: 'c', words: 6 },
+        { content: 'b again with another average one', userId: 'b', words: 6 },
+        { content: 'an enormously long rambling message that goes on and on well past what anyone here would ever type', userId: 'd', words: 19 },
+    ];
+
+    const picked = selectExemplars(candidates, 6.5, 3);
+    const contents = picked.map((p) => p.content);
+
+    assert.ok(contents.some((c) => c.includes('about the average length')));
+    assert.equal(contents.some((c) => c.includes('enormously long rambling')), false, 'outliers misrepresent the norm');
+    assert.equal(new Set(picked.map((p, i) => contents[i])).size, picked.length);
+    // b appears twice in the input but must contribute at most one exemplar.
+    assert.ok(picked.length <= 3);
+});
+
+test('selectExemplars is safe on empty input', () => {
+    assert.deepEqual(selectExemplars([], 5), []);
+    assert.deepEqual(selectExemplars(null, 5), []);
+});
+
+test('styleExemplars still reads through to the cached profile', () => {
+    const db = tempDb();
+    seed(db, Array.from({ length: 12 }, (_, i) => [`u${i % 4}`, `bawberry holding site again ${i}`]));
+    const exemplars = styleExemplars(db, 'g1', { limit: 2 });
+    assert.equal(exemplars.length, 2);
+    assert.equal(styleExemplars(db, 'unknown-guild').length, 0);
     db.close();
 });

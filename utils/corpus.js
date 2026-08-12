@@ -26,6 +26,7 @@
 // single LLM path in utils/prompt.js.
 
 const { safeError } = require('./log');
+const { prepareCached } = require('./sql');
 const { COMMON_WORDS } = require('./commonWords');
 
 // Keep the corpus bounded so a busy server cannot grow the SQLite file
@@ -140,7 +141,7 @@ function recordMessage(db, { guildId, channelId, userId, author, content, ts = D
     if (!isLearnable(content)) return false;
 
     try {
-        db.prepare(
+        prepareCached(db, 
             'INSERT INTO corpus_messages (guild_id, channel_id, user_id, author, content, ts) VALUES (?, ?, ?, ?, ?, ?)'
         ).run(guildId, channelId, userId ?? null, author ?? null, normalizeForLearning(content), ts);
     } catch (e) {
@@ -167,7 +168,7 @@ function pruneCorpus(db, guildId, maxMessages = MAX_CORPUS_MESSAGES_PER_GUILD) {
     try {
         const before = countMessages(db, guildId);
         if (before <= maxMessages) return 0;
-        db.prepare(`
+        prepareCached(db, `
             DELETE FROM corpus_messages
             WHERE guild_id = ?
               AND id NOT IN (
@@ -185,8 +186,8 @@ function forgetGuild(db, guildId) {
     if (!db || !guildId) return 0;
     try {
         const before = countMessages(db, guildId);
-        db.prepare('DELETE FROM corpus_messages WHERE guild_id = ?').run(guildId);
-        db.prepare('DELETE FROM corpus_profiles WHERE guild_id = ?').run(guildId);
+        prepareCached(db, 'DELETE FROM corpus_messages WHERE guild_id = ?').run(guildId);
+        prepareCached(db, 'DELETE FROM corpus_profiles WHERE guild_id = ?').run(guildId);
         return before;
     } catch (e) {
         safeError('[CORPUS] Failed to forget guild corpus:', e);
@@ -197,7 +198,7 @@ function forgetGuild(db, guildId) {
 function countMessages(db, guildId) {
     if (!db || !guildId) return 0;
     try {
-        const row = db.prepare('SELECT COUNT(*) AS n FROM corpus_messages WHERE guild_id = ?').get(guildId);
+        const row = prepareCached(db, 'SELECT COUNT(*) AS n FROM corpus_messages WHERE guild_id = ?').get(guildId);
         return row?.n ?? 0;
     } catch (e) {
         return 0;
@@ -259,6 +260,11 @@ function computeStyleProfile(rows) {
     let endsWithPunctuation = 0;
     let emojiTotal = 0;
 
+    // Exemplar candidates are gathered here rather than in a second pass:
+    // the tokens are already computed, and this used to be a separate 400-row
+    // query plus two more tokenize passes on every single reply.
+    const candidates = [];
+
     for (const row of rows) {
         const raw = row.content || '';
         const userId = row.user_id;
@@ -266,6 +272,9 @@ function computeStyleProfile(rows) {
         if (tokens.length === 0) continue;
 
         totalWords += tokens.length;
+        // One-word grunts misrepresent the norm; so do giant outliers, which
+        // the distance-to-average sort below drops anyway.
+        if (tokens.length >= 2) candidates.push({ content: raw, userId, words: tokens.length });
 
         // Typing habits, measured on the raw text so casing survives.
         if (/[a-zA-Z]/.test(raw)) {
@@ -328,6 +337,7 @@ function computeStyleProfile(rows) {
 
     return {
         sampleSize,
+        exemplars: selectExemplars(candidates, sampleSize > 0 ? totalWords / sampleSize : 0),
         vocabulary: rankEntries(words, thresholds, 30),
         phrases: keptPhrases,
         customEmoji: rankEntries(customEmoji, { minCount: 2, minUsers: 1 }, 8),
@@ -344,7 +354,7 @@ function computeStyleProfile(rows) {
 
 function readProfileCache(db, guildId) {
     try {
-        const row = db.prepare(
+        const row = prepareCached(db, 
             'SELECT profile, message_count, computed_at FROM corpus_profiles WHERE guild_id = ?'
         ).get(guildId);
         if (!row) return null;
@@ -360,7 +370,7 @@ function readProfileCache(db, guildId) {
 
 function writeProfileCache(db, guildId, profile, messageCount) {
     try {
-        db.prepare(`
+        prepareCached(db, `
             INSERT INTO corpus_profiles (guild_id, profile, message_count, computed_at)
             VALUES (?, ?, ?, ?)
             ON CONFLICT(guild_id) DO UPDATE SET
@@ -391,7 +401,7 @@ function getStyleProfile(db, guildId, { force = false } = {}) {
     }
 
     try {
-        const rows = db.prepare(
+        const rows = prepareCached(db, 
             'SELECT content, user_id FROM corpus_messages WHERE guild_id = ? ORDER BY ts DESC LIMIT ?'
         ).all(guildId, PROFILE_WINDOW);
         const profile = computeStyleProfile(rows);
@@ -431,7 +441,7 @@ function needsPrecedingContext(content, tokenCount) {
 // utils/media.js already relies on for GIFs.
 function fetchPrecedingMessage(db, guildId, channelId, ts) {
     try {
-        return db.prepare(
+        return prepareCached(db, 
             'SELECT author, content FROM corpus_messages WHERE guild_id = ? AND channel_id = ? AND ts < ? ORDER BY ts DESC LIMIT 1'
         ).get(guildId, channelId, ts) || null;
     } catch (e) {
@@ -443,7 +453,7 @@ function fetchPrecedingMessage(db, guildId, channelId, ts) {
 // that filtering it down to one guild still fills the precedent slots.
 function guildCount(db) {
     try {
-        return db.prepare('SELECT COUNT(DISTINCT guild_id) AS n FROM corpus_messages').get()?.n || 1;
+        return prepareCached(db, 'SELECT COUNT(DISTINCT guild_id) AS n FROM corpus_messages').get()?.n || 1;
     } catch (e) {
         return 1;
     }
@@ -466,6 +476,24 @@ function guildCount(db) {
 // counted.
 const POOL_LIMIT_CAP = 600;
 
+// Kept as a named constant so the regression test can EXPLAIN the real query
+// rather than a copy of it — a copy would keep passing while this changed.
+// The plan must show the FTS subquery as a CO-ROUTINE (ranked and bounded
+// before the join); the slow phrasing instead drives from corpus_messages and
+// sorts at the end.
+const RETRIEVE_SIMILAR_SQL = `
+    SELECT m.id, m.author, m.user_id, m.channel_id, m.content, m.ts, f.score AS bm25score
+    FROM (
+        SELECT rowid AS rid, bm25(corpus_fts) AS score
+        FROM corpus_fts
+        WHERE corpus_fts MATCH ?
+        ORDER BY bm25(corpus_fts) LIMIT ?
+    ) f
+    JOIN corpus_messages m ON m.id = f.rid
+    WHERE m.guild_id = ?
+    ORDER BY f.score
+`;
+
 // Pulls the messages this server has actually written about the topic at
 // hand. This is the bot's memory of server lore: names, running jokes, what
 // happened last week — none of which any model was trained on.
@@ -486,18 +514,7 @@ function retrieveSimilar(db, guildId, queryText, { limit = 6, poolMultiplier = 5
 
     try {
         const poolLimit = Math.min(limit * poolMultiplier * guildCount(db), POOL_LIMIT_CAP);
-        const pool = db.prepare(`
-            SELECT m.id, m.author, m.user_id, m.channel_id, m.content, m.ts, f.score AS bm25score
-            FROM (
-                SELECT rowid AS rid, bm25(corpus_fts) AS score
-                FROM corpus_fts
-                WHERE corpus_fts MATCH ?
-                ORDER BY bm25(corpus_fts) LIMIT ?
-            ) f
-            JOIN corpus_messages m ON m.id = f.rid
-            WHERE m.guild_id = ?
-            ORDER BY f.score
-        `).all(match, poolLimit, guildId);
+        const pool = prepareCached(db, RETRIEVE_SIMILAR_SQL).all(match, poolLimit, guildId);
 
         const scored = pool.map((row) => {
             const rowTokens = tokenize(row.content);
@@ -533,39 +550,33 @@ function retrieveSimilar(db, guildId, queryText, { limit = 6, poolMultiplier = 5
     }
 }
 
-// Representative messages, chosen for shape rather than topic: close to the
-// server's typical length, one per author, recent. Retrieval shows the model
-// what the server knows; these show it what a message here looks like — which
-// is the thing a Markov chain gets for free and a prompt has to teach.
+// Representative messages, chosen for shape rather than topic: closest to the
+// server's typical length, one per author. Retrieval shows the model what the
+// server knows; these show it what a message here looks like — which is the
+// thing a Markov chain gets for free and a prompt has to teach.
+//
+// Pure, and computed as part of the dialect profile, so it is cached on the
+// same staleness policy instead of re-querying and re-tokenizing per reply.
+function selectExemplars(candidates, averageWords, limit = 5) {
+    if (!candidates || candidates.length === 0) return [];
+
+    const seenAuthors = new Set();
+    return [...candidates]
+        .sort((a, b) => Math.abs(a.words - averageWords) - Math.abs(b.words - averageWords))
+        .filter((candidate) => {
+            const author = candidate.userId ?? Symbol('anonymous');
+            if (seenAuthors.has(author)) return false;
+            seenAuthors.add(author);
+            return true;
+        })
+        .slice(0, limit)
+        .map((candidate) => ({ content: candidate.content }));
+}
+
+// Back-compat accessor: reads the exemplars off the cached profile.
 function styleExemplars(db, guildId, { limit = 5 } = {}) {
-    if (!db || !guildId) return [];
-    try {
-        const rows = db.prepare(
-            'SELECT author, content, user_id FROM corpus_messages WHERE guild_id = ? ORDER BY ts DESC LIMIT 400'
-        ).all(guildId);
-        if (rows.length === 0) return [];
-
-        const lengths = rows.map((row) => tokenize(row.content).length).filter((n) => n > 0);
-        if (lengths.length === 0) return [];
-        const average = lengths.reduce((sum, n) => sum + n, 0) / lengths.length;
-
-        const seenAuthors = new Set();
-        return rows
-            .map((row) => ({ row, words: tokenize(row.content).length }))
-            // Skip one-word grunts and outliers; both misrepresent the norm.
-            .filter(({ words }) => words >= 2)
-            .sort((a, b) => Math.abs(a.words - average) - Math.abs(b.words - average))
-            .filter(({ row }) => {
-                const author = row.user_id || row.author;
-                if (seenAuthors.has(author)) return false;
-                seenAuthors.add(author);
-                return true;
-            })
-            .slice(0, limit)
-            .map(({ row }) => row);
-    } catch (e) {
-        return [];
-    }
+    const profile = getStyleProfile(db, guildId);
+    return (profile?.exemplars || []).slice(0, limit);
 }
 
 // Fallback texture when retrieval finds nothing: a sample of how the server
@@ -573,7 +584,7 @@ function styleExemplars(db, guildId, { limit = 5 } = {}) {
 function recentMessages(db, guildId, { limit = 6 } = {}) {
     if (!db || !guildId) return [];
     try {
-        return db.prepare(
+        return prepareCached(db, 
             'SELECT author, content, ts FROM corpus_messages WHERE guild_id = ? ORDER BY ts DESC LIMIT ?'
         ).all(guildId, limit);
     } catch (e) {
@@ -592,8 +603,10 @@ module.exports = {
     retrieveSimilar,
     recentMessages,
     styleExemplars,
+    selectExemplars,
     buildMatchQuery,
     guildCount,
+    RETRIEVE_SIMILAR_SQL,
     tokenize,
     normalizeForLearning,
     isLearnable,

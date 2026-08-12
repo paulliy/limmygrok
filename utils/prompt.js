@@ -21,7 +21,6 @@ const {
     getStyleProfile,
     retrieveSimilar,
     recentMessages,
-    styleExemplars,
 } = require('./corpus');
 
 const BASE_SYSTEM_PROMPT = [
@@ -223,7 +222,9 @@ function buildReplyContext({
         const dialect = renderDialectBlock(profile);
         if (dialect) parts.push(dialect);
 
-        const exemplars = renderExemplars(styleExemplars(db, guildId, { limit: 5 }));
+        // Carried on the profile, so this costs nothing beyond the profile
+        // lookup already done above.
+        const exemplars = renderExemplars(profile?.exemplars);
         if (exemplars) parts.push(exemplars);
 
         let rows = retrieveSimilar(db, guildId, queryText, { limit: maxPrecedent });

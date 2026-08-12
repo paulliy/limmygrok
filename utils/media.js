@@ -16,6 +16,7 @@
 // embed itself — so nothing is ever re-uploaded or stored beyond the link.
 
 const { safeError } = require('./log');
+const { prepareCached } = require('./sql');
 const { tokenize, normalizeForLearning, guildCount } = require('./corpus');
 const { COMMON_WORDS } = require('./commonWords');
 
@@ -156,7 +157,7 @@ function recordMedia(db, { guildId, content, attachments, ownText, precedingText
 
     for (const { url, kind } of media) {
         try {
-            const existing = db.prepare('SELECT id, context FROM corpus_media WHERE guild_id = ? AND url = ?')
+            const existing = prepareCached(db, 'SELECT id, context FROM corpus_media WHERE guild_id = ? AND url = ?')
                 .get(guildId, url);
 
             if (existing) {
@@ -164,10 +165,10 @@ function recordMedia(db, { guildId, content, attachments, ownText, precedingText
                 // situations stays findable in all of them without the row
                 // growing without bound.
                 const merged = `${context} ${existing.context}`.trim().slice(0, MAX_CONTEXT_CHARS);
-                db.prepare('UPDATE corpus_media SET uses = uses + 1, context = ?, last_used = ? WHERE id = ?')
+                prepareCached(db, 'UPDATE corpus_media SET uses = uses + 1, context = ?, last_used = ? WHERE id = ?')
                     .run(merged, ts, existing.id);
             } else {
-                db.prepare(
+                prepareCached(db, 
                     'INSERT INTO corpus_media (guild_id, url, kind, context, uses, last_used) VALUES (?, ?, ?, ?, 1, ?)'
                 ).run(guildId, url, kind, context, ts);
             }
@@ -204,7 +205,7 @@ function findMatchingMedia(db, guildId, queryText, { limit = 3, minUses = MIN_US
 
     try {
         const poolLimit = Math.min(limit * 10 * guildCount(db), 300);
-        return db.prepare(`
+        return prepareCached(db, `
             SELECT m.url, m.kind, m.uses, f.score
             FROM (
                 SELECT rowid AS rid, bm25(corpus_media_fts) AS score
@@ -261,7 +262,7 @@ function pickGarnishGif(db, guildId, queryText, {
 function countMedia(db, guildId) {
     if (!db || !guildId) return 0;
     try {
-        return db.prepare('SELECT COUNT(*) AS n FROM corpus_media WHERE guild_id = ?').get(guildId)?.n ?? 0;
+        return prepareCached(db, 'SELECT COUNT(*) AS n FROM corpus_media WHERE guild_id = ?').get(guildId)?.n ?? 0;
     } catch (e) {
         return 0;
     }
@@ -271,7 +272,7 @@ function forgetMedia(db, guildId) {
     if (!db || !guildId) return 0;
     try {
         const before = countMedia(db, guildId);
-        db.prepare('DELETE FROM corpus_media WHERE guild_id = ?').run(guildId);
+        prepareCached(db, 'DELETE FROM corpus_media WHERE guild_id = ?').run(guildId);
         return before;
     } catch (e) {
         safeError('[MEDIA] Failed to forget media:', e);

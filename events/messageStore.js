@@ -8,6 +8,7 @@ const { isDirectlyAddressed } = require('../utils/triggers');
 const { recordMessage } = require('../utils/corpus');
 const { recordMedia } = require('../utils/media');
 const { recordEvent } = require('../utils/stats');
+const { readTurns, writeTurns } = require('../utils/memory');
 
 // Memory entries hold either a plain string or an array of content parts;
 // media context only needs the words.
@@ -44,24 +45,12 @@ module.exports = {
         // events/mention.js.)
         if (!isChannelAllowed(message.client, channelId)) return;
 
-        const previousMemory = message.client.memory.get(channelId) || [];
-        let memory = previousMemory.slice();
+        const previousMemory = readTurns(message.client, channelId);
 
-        // Add the current message
+        // Add the current message. writeTurns applies the window cap.
         const parsed = parseimgs(message);
         const added = parsed.length > 0 ? [parsed[0]] : [];
-        if (added.length > 0) {
-            memory.push(...added);
-        }
-
-        // Keep only the last 20
-        let removed = [];
-        if (memory.length > 20) {
-            removed = memory.slice(0, memory.length - 20);
-            memory = memory.slice(-20);
-        }
-
-        message.client.memory.set(channelId, memory);
+        writeTurns(message.client, channelId, [...previousMemory, ...added]);
 
         // Feed the long-term corpus. Unlike `memory` (a 20-turn rolling window
         // used as conversation context) this is permanent and is what the
@@ -93,7 +82,7 @@ module.exports = {
             userId: message.author.id,
         });
 
-        debugLog('[MEMORY]', JSON.stringify({ added, removed }, null, 2));
+        debugLog('[MEMORY]', JSON.stringify({ added }, null, 2));
 
         // Handle counter for auto-response
         let count = message.client.messageCounts.get(channelId) || 0;

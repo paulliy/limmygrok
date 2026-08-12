@@ -26,7 +26,7 @@ Every reply's system prompt is assembled fresh by **`buildReplyContext`** (in `u
 
 1. **`BASE_SYSTEM_PROMPT`** — persona. Static. Overridable via `SYSTEM_PROMPT`.
 2. **Dialect profile** — the server's distinctive vocabulary, catchphrases, emoji and typing habits. Computed by counting everything in the corpus and **subtracting `utils/commonWords.js`**; whatever survives is server-specific. Cached in `corpus_profiles`, recomputed when stale (30 min) or after 40 new messages — the message threshold is what makes adaptation feel fast.
-3. **Exemplars** (`styleExemplars`) — bare server messages near the typical length, one per author, shown with no author prefix. These teach *form*; precedent teaches *content*. Keep the two distinct.
+3. **Exemplars** — bare server messages near the typical length, one per author, shown with no author prefix. These teach *form*; precedent teaches *content*. Keep the two distinct. They're selected inside `computeStyleProfile` (the tokens are already computed there) and ride on the cached profile as `profile.exemplars`, so a reply costs nothing extra for them — they used to be a separate 400-row query plus two tokenize passes *per reply*.
 4. **Precedent** — real server messages retrieved for the current topic via **SQLite FTS5** (`corpus_fts`, external-content table kept in sync by triggers). Falls back to recent messages when nothing matches.
 
 **Rank inside FTS5, then join — never the other way round.** The obvious phrasing (`FROM corpus_fts JOIN corpus_messages ... WHERE MATCH ? AND guild_id = ? ORDER BY bm25(...) LIMIT n`) makes SQLite materialise the join for *every* matching row before sorting, so a query term appearing in most messages costs time proportional to the whole corpus. Measured on 1,200 messages: **133 ms that way, 1.2 ms ranking first**, byte-identical results. Neither operation is slow alone (sort 1.0 ms, join 0.5 ms) — the order is the bug. Both `retrieveSimilar` and `findMatchingMedia` (`utils/media.js`) therefore rank + `LIMIT` inside the FTS table in a subquery and join only the survivors. **Consequence: the `guild_id` filter now sits *outside* the ranked subquery, so the inner limit is scaled by `guildCount(db)`** — otherwise, on a bot in several servers, another guild's hits eat the pool before this guild's are counted. Regression-tested by guild-isolation, pool-fill, and a deliberately generous timing guard.
@@ -76,6 +76,15 @@ Custom emoji are stored as the full `<:name:id>` form, never the bare `:name:` �
 - `client.allowedChannels`: opt-in allowlist (`channelId -> guildId`) for **ambient auto-responses and ambient learning**. Empty = the bot listens nowhere. Direct address is **not** gated by this.
 
 These four are **`PersistentMap`** instances (`utils/db.js`) — `Map` subclasses that write-through every `.set()`/`.delete()` to `data.sqlite` (Bun's built-in `bun:sqlite`) and reload on startup. **Consequence: mutating a stored value in place does not persist it — you must call `.set()` again.** `bun:sqlite` is why the bot must run under Bun, not Node. `data.sqlite*` is gitignored.
+
+### One reply path, two triggers (`utils/reply.js`)
+`generateReply()` owns everything from "we've decided to say something" to "it's on screen": build the learned context, pick the model, stream, apply the voice filter, maybe garnish with a GIF, record the event, append to memory, and render provider errors. **Both triggers call it — do not reimplement any of it in a handler.** They previously each carried their own copy of that sequence, and four separate changes (voice filter, per-request model routing, GIF garnish, privacy config) each had to be made twice; a fifth made once would have silently split "the bot replying to you" from "the bot chiming in".
+
+What legitimately stays with a trigger: how it fires, what context it assembles, its cooldown, and its typing indicator. Callers create `replyMessage` and the animator so each keeps its own loading UX, and `generateReply` handles its own errors rather than throwing — a caller's `catch` only sees failures from *before* generation started.
+
+`utils/memory.js` owns the rolling conversation window (`MEMORY_LIMIT`, `readTurns`/`writeTurns`/`appendTurn`). The cap was previously inline in three places with three copies of the number. **Always write through `writeTurns`** — `client.memory` is a `PersistentMap` that persists on `.set()` and only on `.set()`.
+
+`utils/sql.js` (`prepareCached`) caches prepared statements per database handle. Worth ~9 µs per call on cheap queries (12.1 µs → 2.9 µs); invisible on `corpus_messages` inserts, where FTS trigger writes dominate at ~450 µs regardless.
 
 ### Two MessageCreate listeners, deliberately coordinated
 Both fire on every message; they divide ownership via `utils/triggers.js` to avoid double-processing:
