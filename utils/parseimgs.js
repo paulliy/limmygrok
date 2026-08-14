@@ -114,6 +114,40 @@ async function isSafeUrl(url) {
     }
 }
 
+const DISCORD_CDN_HOSTS = ['cdn.discordapp.com', 'media.discordapp.net'];
+
+// Discord CDN links are signed and time-limited: `ex` is the expiry as a hex
+// unix timestamp, and once it passes the URL 404s for everyone, us and the
+// model provider alike.
+//
+// This matters because conversation memory holds image turns for up to
+// MEMORY_LIMIT messages. Without this check an image posted hours ago keeps
+// being sent on every later reply in that channel — routing the request to
+// the (pricier) vision model via pickModel, and handing it a URL that
+// resolves to nothing. Detecting it from the URL avoids the doomed fetch too.
+//
+// Anything we cannot read an expiry from is treated as live: an unsigned or
+// unparseable URL might still work, and dropping a valid image is worse than
+// attempting one that fails.
+function isExpiredDiscordUrl(url, now = Date.now()) {
+    let parsed;
+    try {
+        parsed = new URL(url);
+    } catch (e) {
+        return false;
+    }
+
+    if (!DISCORD_CDN_HOSTS.includes(parsed.hostname.toLowerCase())) return false;
+
+    const expiry = parsed.searchParams.get('ex');
+    if (!expiry) return false;
+
+    const expiresAtSeconds = Number.parseInt(expiry, 16);
+    if (!Number.isFinite(expiresAtSeconds)) return false;
+
+    return expiresAtSeconds * 1000 < now;
+}
+
 async function downloadImageAsBase64(url) {
     try {
         if (!url) return null;
@@ -240,6 +274,11 @@ async function resolveImageUrlsToBase64(messages) {
             const newContent = [];
             for (const part of newMsg.content) {
                 if (part && part.type === 'image_url' && part.image_url && part.image_url.url) {
+                    // A link whose signature has already lapsed is dead for
+                    // everyone; carrying it forward only pays vision-model
+                    // rates to show the model nothing.
+                    if (isExpiredDiscordUrl(part.image_url.url)) continue;
+
                     const resolvedUrl = await downloadImageAsBase64(part.image_url.url);
                     newContent.push({
                         type: 'image_url',
@@ -251,6 +290,10 @@ async function resolveImageUrlsToBase64(messages) {
                     newContent.push(part);
                 }
             }
+            // An image-only turn whose image has expired has nothing left to
+            // say. Sending an empty content array is an API error, so the turn
+            // is dropped — the same way parseimgs already drops empty ones.
+            if (newContent.length === 0) continue;
             newMsg.content = newContent;
         }
         resolvedMessages.push(newMsg);
@@ -401,6 +444,7 @@ function parseimgs(messages) {
 
 module.exports = {
     isImageUrl,
+    isExpiredDiscordUrl,
     parseTextAndImages,
     formatContent,
     parseDiscordMessage,

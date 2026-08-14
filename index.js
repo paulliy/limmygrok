@@ -1,5 +1,5 @@
 // Require the necessary discord.js classes
-const { Client, Events, GatewayIntentBits, Collection, MessageFlags} = require('discord.js');
+const { Client, GatewayIntentBits, Collection } = require('discord.js');
 const fs = require('node:fs');
 const path = require('node:path');
 const { safeLog, safeError } = require('./utils/log');
