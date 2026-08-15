@@ -124,7 +124,10 @@ function missingConfigKeys(config, requiredKeys) {
 function assertRequiredConfig(config, requiredKeys) {
     const missing = missingConfigKeys(config, requiredKeys);
     if (missing.length > 0) {
-        throw new Error(`config.json is missing required key(s): ${missing.join(', ')}`);
+        // Deliberately does not say "config.json": the environment is the
+        // primary path now (see docs/DEPLOY-ORACLE.md), and naming a file the
+        // deployer may not even have sends them looking in the wrong place.
+        throw new Error(`Configuration is missing required key(s): ${missing.join(', ')}`);
     }
 }
 

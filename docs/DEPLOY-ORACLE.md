@@ -74,6 +74,19 @@ Fill in, at minimum:
 **Bot → Privileged Gateway Intents**, enable **Message Content Intent**. The
 bot cannot read messages (and therefore cannot learn anything) without it.
 
+### Inviting the bot to your server
+
+Still in the Developer Portal, go to **OAuth2 → URL Generator**:
+
+- **Scopes:** `bot` *and* `applications.commands` (without the second, the
+  slash commands register but never appear)
+- **Bot Permissions:** Send Messages, Read Message History, Embed Links,
+  Use External Emojis, Attach Files
+
+Open the generated URL and pick your server. **Read Message History** is the
+one people miss — `/channels add` uses it to backfill, and without it the bot
+starts from nothing.
+
 ### A word on OpenRouter's free tier
 
 Models whose IDs end in `:free` cost nothing but are capped at **20
@@ -85,11 +98,35 @@ Two ways out, both cheap:
 
 - A **one-time $10 credit purchase** raises the free-model cap to 1,000
   requests/day, permanently.
-- Or use a **paid model** — the default `meta-llama/llama-3.3-70b-instruct`
-  bills per token at a fraction of a cent per reply, with no daily cap.
+- Or use a **paid model** — the defaults below bill per token at a fraction of
+  a cent per reply, with no daily cap.
 
 The bot tells you which of these you have hit: a 429 produces a plain-English
 message in Discord rather than a wall of provider JSON.
+
+### Models and privacy — both defaulted, neither needs setting
+
+The bot uses **two** models and picks per request. The everyday one is
+text-only; the vision one is swapped in only when a message actually contains
+an image, so ordinary chat never pays multimodal rates:
+
+| | Model | Cost |
+| --- | --- | --- |
+| Everyday chat | `deepseek/deepseek-v4-flash-0731` | $0.09/M in, $0.18/M out |
+| Messages with images | `qwen/qwen3.7-flash` | $0.03/M in, $0.13/M out |
+
+Override either with `LLM_MODEL` / `LLM_VISION_MODEL` if one gets retired — the
+"Model not found" error names whichever is configured.
+
+Every request also carries `data_collection: deny` and `zdr: true`, so
+OpenRouter only routes it to a backing provider that neither trains on your
+server's messages nor retains them. That is on by default; `LLM_DENY_TRAINING=0`
+and `LLM_ZDR=0` relax it if a model you want has no compliant host.
+
+**This does not cover your OpenRouter account settings.** Go to
+[openrouter.ai/settings/privacy](https://openrouter.ai/settings/privacy) and
+check the training toggle there too — some accounts allow training on
+free-model prompts by default. The two are belt-and-braces, not either/or.
 
 ## 4. Start it
 
@@ -101,7 +138,7 @@ docker compose logs -f
 You should see the provider line, the slash-command deploy, and then the login:
 
 ```
-[BOOT] LLM provider: OpenRouter — model meta-llama/llama-3.3-70b-instruct
+[BOOT] LLM provider: OpenRouter — model deepseek/deepseek-v4-flash-0731
 [entrypoint] deploying slash commands...
 Successfully reloaded 5 application (/) commands.
 ```
@@ -181,9 +218,11 @@ Read `deploy/limmygrok.service` first — it assumes the repo is at
 
 | Symptom | Cause |
 | --- | --- |
-| `[FATAL] config.json is missing required key(s)` | A variable is unset or blank in `.env`. The message names which. |
+| `[FATAL] Configuration is missing required key(s)` | A variable is unset or blank in `.env`. The message names which. |
 | Bot online but never replies to ambient chat | The channel is not on the allowlist — run `/channels add`. |
 | Bot ignores everything, even @mentions | **Message Content Intent** is off in the Developer Portal. |
 | `Rate limited by OpenRouter` | The free-tier daily cap. See §3. |
 | `/dialect show` says nothing learned | No channel added yet, or the bot lacks **Read Message History** for the backfill. |
 | Slash commands missing | `DISCORD_GUILD_ID` is wrong, or the bot was invited without the `applications.commands` scope. |
+| `Model not found on this provider` | An OpenRouter model ID was retired. Set a current one via `LLM_MODEL` / `LLM_VISION_MODEL`. |
+| Replies read like a generic chatbot | The corpus is still empty — check `/dialect show`. The voice comes from learned messages, so it needs some first. |
