@@ -45,3 +45,8 @@ dashboard
 # markdown docs
 *.md
 CLAUDE.md
+# ...except the ones that are part of the project. Deployment instructions are
+# useless to the person deploying if they never leave the author's machine.
+!README.md
+!CLAUDE.md
+!docs/*.md

@@ -1,12 +1,12 @@
 const { REST, Routes } = require('discord.js');
 const fs = require('node:fs');
 const path = require('node:path');
-const { safeLog, safeError } = require('./utils/parseimgs');
-const { assertRequiredConfig, loadConfig } = require('./utils/config');
+const { safeLog, safeError } = require('./utils/log');
+const { assertRequiredConfig, resolveConfig } = require('./utils/config');
 
-const config = loadConfig();
+const config = resolveConfig();
 if (!config) {
-	safeError('[FATAL] config.json not found next to deploy-commands.js. In Docker, bind-mount it: -v /path/to/config.json:/app/config.json:ro');
+	safeError('[FATAL] No configuration found. Set DISCORD_TOKEN, DISCORD_CLIENT_ID and DISCORD_GUILD_ID in the environment, or provide a config.json.');
 	process.exit(1);
 }
 try {

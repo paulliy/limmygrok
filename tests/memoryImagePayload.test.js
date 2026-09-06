@@ -79,7 +79,7 @@ function createMockMessage({
     memory = new Map(),
     messageCounts = new Map(),
     cooldowns = new Map(),
-    openWebUI = null,
+    llm = null,
     mentions = null
 } = {}) {
     const message = {
@@ -93,7 +93,7 @@ function createMockMessage({
             memory,
             messageCounts,
             cooldowns,
-            openWebUI,
+            llm,
             // Allow this channel so messageStore's ambient path runs in tests.
             allowedChannels: new Map([[channelId, 'guild-test']]),
             user: { id: 'bot-123', username: 'limmybot' }
@@ -166,13 +166,13 @@ test('test_t1_store_text_assistant_message - verifies assistant message is appen
     const memory = new Map();
     memory.set('ch-1', [{ role: 'user', content: 'hello bot' }]);
     
-    const openWebUI = createMockOpenAI();
+    const llm = createMockOpenAI();
     const message = createMockMessage({
         content: 'hello bot',
         bot: false,
         channelId: 'ch-1',
         memory,
-        openWebUI
+        llm
     });
     
     // We call generateAutoresponce directly
@@ -231,14 +231,14 @@ test('test_t1_flat_payload_auto_response - verifies autoresponse delivers flat p
     ]);
     
     let capturedPayload = null;
-    const openWebUI = createMockOpenAI((payload) => {
+    const llm = createMockOpenAI((payload) => {
         capturedPayload = payload;
     });
     
     const message = createMockMessage({
         channelId: 'ch-1',
         memory,
-        openWebUI
+        llm
     });
     
     await autoresponce.generateAutoresponce(message);
@@ -261,7 +261,7 @@ test('test_t1_flat_payload_mention - verifies mention delivers flat payload to O
     ]);
     
     let capturedPayload = null;
-    const openWebUI = createMockOpenAI((payload) => {
+    const llm = createMockOpenAI((payload) => {
         capturedPayload = payload;
     });
     
@@ -274,7 +274,7 @@ test('test_t1_flat_payload_mention - verifies mention delivers flat payload to O
         content: '<@bot-123> help me',
         channelId: 'ch-1',
         memory,
-        openWebUI,
+        llm,
         mentions
     });
     
@@ -393,11 +393,11 @@ test('test_t2_clean_debug_logs - ensure debug logging does not leak token or API
     const memory = new Map();
     memory.set('ch-1', [{ role: 'user', content: 'run autoresponse' }]);
     
-    const openWebUI = createMockOpenAI();
+    const llm = createMockOpenAI();
     const message = createMockMessage({
         channelId: 'ch-1',
         memory,
-        openWebUI
+        llm
     });
     
     const originalLog = console.log;
@@ -486,7 +486,7 @@ test('test_t3_mention_large_mixed_history - retrieves last 5 messages, merges, a
     ]);
     
     let capturedPayload = null;
-    const openWebUI = createMockOpenAI((payload) => {
+    const llm = createMockOpenAI((payload) => {
         capturedPayload = payload;
     });
     
@@ -499,7 +499,7 @@ test('test_t3_mention_large_mixed_history - retrieves last 5 messages, merges, a
         content: '<@bot-123> answer me',
         channelId: 'ch-1',
         memory,
-        openWebUI,
+        llm,
         mentions
     });
     
@@ -521,7 +521,7 @@ test('test_t4_full_conversation_flow - runs multi-turn conversation verifying fl
     const memory = new Map();
     const messageCounts = new Map();
     let capturedPayload = null;
-    const openWebUI = createMockOpenAI((payload) => {
+    const llm = createMockOpenAI((payload) => {
         capturedPayload = payload;
     });
     
@@ -532,7 +532,7 @@ test('test_t4_full_conversation_flow - runs multi-turn conversation verifying fl
         channelId: 'ch-1',
         memory,
         messageCounts,
-        openWebUI
+        llm
     });
     await messageStore.execute(msg1);
     
@@ -549,7 +549,7 @@ test('test_t4_full_conversation_flow - runs multi-turn conversation verifying fl
         channelId: 'ch-1',
         memory,
         messageCounts,
-        openWebUI
+        llm
     });
     await messageStore.execute(msg2);
     
@@ -574,7 +574,7 @@ test('test_t4_full_conversation_flow - runs multi-turn conversation verifying fl
         channelId: 'ch-1',
         memory,
         messageCounts,
-        openWebUI,
+        llm,
         mentions,
         attachments: [
             { contentType: 'image/png', url: 'https://cdn.discordapp.com/user_img.png' }
@@ -607,14 +607,14 @@ test('test_t4_complex_merge_flow - verifies adjacent messages of same role merge
     ]);
     
     let capturedPayload = null;
-    const openWebUI = createMockOpenAI((payload) => {
+    const llm = createMockOpenAI((payload) => {
         capturedPayload = payload;
     });
     
     const message = createMockMessage({
         channelId: 'ch-1',
         memory,
-        openWebUI
+        llm
     });
     
     await autoresponce.generateAutoresponce(message);
@@ -633,7 +633,7 @@ test('test_t4_complex_merge_flow - verifies adjacent messages of same role merge
 
 test('test_t5_typing_indicator_leak_on_reply_failure - clears typing interval even if reply fails', async () => {
     const memory = new Map();
-    const openWebUI = createMockOpenAI();
+    const llm = createMockOpenAI();
     const mentions = {
         has: mockFn(() => true),
         roles: new Map()
@@ -643,7 +643,7 @@ test('test_t5_typing_indicator_leak_on_reply_failure - clears typing interval ev
         content: '<@bot-123> error message',
         channelId: 'ch-1',
         memory,
-        openWebUI,
+        llm,
         mentions
     });
     
@@ -697,7 +697,7 @@ test('test_t5_duplicate_check_with_image_in_history - replaces last history mess
     ]);
     
     let capturedPayload = null;
-    const openWebUI = createMockOpenAI((payload) => {
+    const llm = createMockOpenAI((payload) => {
         capturedPayload = payload;
     });
     
@@ -710,7 +710,7 @@ test('test_t5_duplicate_check_with_image_in_history - replaces last history mess
         content: '<@bot-123> help with image',
         channelId: 'ch-1',
         memory,
-        openWebUI,
+        llm,
         mentions,
         attachments: [
             { contentType: 'image/png', url: 'https://example.com/img.png' }

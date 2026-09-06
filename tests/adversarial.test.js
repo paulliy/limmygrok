@@ -78,7 +78,7 @@ function createMockMessage({
     memory = new Map(),
     messageCounts = new Map(),
     cooldowns = new Map(),
-    openWebUI = null,
+    llm = null,
     mentions = null
 } = {}) {
     const message = {
@@ -92,7 +92,7 @@ function createMockMessage({
             memory,
             messageCounts,
             cooldowns,
-            openWebUI,
+            llm,
             // Allow this channel so messageStore's ambient path runs in tests.
             allowedChannels: new Map([[channelId, 'guild-test']]),
             user: { id: 'bot-123', username: 'limmybot' }
@@ -121,7 +121,7 @@ function createMockMentionMessage({
     content = '',
     roles = [],
     memory = new Map(),
-    openWebUI = null
+    llm = null
 } = {}) {
     const mockClientUser = { id: 'bot-123', username: 'limmybot' };
     const cooldowns = new Map();
@@ -139,7 +139,7 @@ function createMockMentionMessage({
             cooldowns,
             memory,
             messageCounts,
-            openWebUI
+            llm
         },
         attachments: new Map(),
         mentions: {
@@ -374,7 +374,7 @@ test('Mention parsing - bot mention mixed in other words', async () => {
         memory
     });
     
-    const openWebUI = {
+    const llm = {
         chat: {
             completions: {
                 create: mockFn(async () => {
@@ -385,7 +385,7 @@ test('Mention parsing - bot mention mixed in other words', async () => {
             }
         }
     };
-    msg.client.openWebUI = openWebUI;
+    msg.client.llm = llm;
 
     await mention.execute(msg);
 
@@ -402,7 +402,7 @@ test('Mention parsing - double mentions', async () => {
         memory
     });
 
-    const openWebUI = {
+    const llm = {
         chat: {
             completions: {
                 create: mockFn(async () => {
@@ -413,7 +413,7 @@ test('Mention parsing - double mentions', async () => {
             }
         }
     };
-    msg.client.openWebUI = openWebUI;
+    msg.client.llm = llm;
 
     await mention.execute(msg);
 
@@ -433,7 +433,7 @@ test('Mention parsing - role mentions matching username are stripped, other role
         memory
     });
 
-    const openWebUI = {
+    const llm = {
         chat: {
             completions: {
                 create: mockFn(async () => {
@@ -444,7 +444,7 @@ test('Mention parsing - role mentions matching username are stripped, other role
             }
         }
     };
-    msg.client.openWebUI = openWebUI;
+    msg.client.llm = llm;
 
     await mention.execute(msg);
 
@@ -475,7 +475,7 @@ test('Log scrubbing - normal operations do not leak secrets', async () => {
     const memory = new Map([
         ['ch-1', [{ role: 'user', content: 'test message' }]]
     ]);
-    const openWebUI = {
+    const llm = {
         chat: {
             completions: {
                 create: mockFn(async () => {
@@ -490,7 +490,7 @@ test('Log scrubbing - normal operations do not leak secrets', async () => {
         content: 'trigger response',
         channelId: 'ch-1',
         memory,
-        openWebUI
+        llm
     });
     
     const logs = [];
@@ -536,10 +536,17 @@ test('Log scrubbing - user message containing Discord token is redacted', async 
         logs.push(args.map(arg => arg instanceof Error ? `${arg.message}\n${arg.stack}` : String(arg)).join(' '));
     };
 
+    // The per-message memory dump is opt-in (utils/log.js), and it is the log
+    // line this test inspects — turn it on for the duration.
+    const previousDebug = process.env.DEBUG_PAYLOADS;
+    process.env.DEBUG_PAYLOADS = '1';
+
     try {
         await messageStore.execute(msg);
     } finally {
         console.log = originalLog;
+        if (previousDebug === undefined) delete process.env.DEBUG_PAYLOADS;
+        else process.env.DEBUG_PAYLOADS = previousDebug;
     }
 
     const hasRedacted = logs.some(log => log.includes('[REDACTED_DISCORD_TOKEN]'));
@@ -558,7 +565,7 @@ test('Log scrubbing - OpenAI error leaking API key in stack/message is redacted'
     memory.set('ch-1', [{ role: 'user', content: 'hello' }]);
     msg.client.messageCounts.set('ch-1', 19); // 19 + 1 = 20, triggers auto-response
 
-    const openWebUI = {
+    const llm = {
         chat: {
             completions: {
                 create: mockFn(async () => {
@@ -569,7 +576,7 @@ test('Log scrubbing - OpenAI error leaking API key in stack/message is redacted'
             }
         }
     };
-    msg.client.openWebUI = openWebUI;
+    msg.client.llm = llm;
 
     const errorLogs = [];
     const originalError = console.error;

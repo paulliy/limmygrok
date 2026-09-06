@@ -2,7 +2,8 @@ const { test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const dns = require('dns');
 
-const { createChatCompletionWithFallback, resolveImageUrlsToBase64 } = require('../utils/parseimgs');
+const { resolveImageUrlsToBase64 } = require('../utils/parseimgs');
+const { requestChatCompletion } = require('../utils/llm');
 
 const realConsoleLog = console.log;
 const realConsoleError = console.error;
@@ -43,7 +44,7 @@ test('falls back to non-streaming chat completion when streaming is rejected', a
         }
     };
 
-    const result = await createChatCompletionWithFallback(client, {
+    const result = await requestChatCompletion(client, {
         model: 'test-model',
         messages: [{ role: 'user', content: 'hello' }],
         stream: true
@@ -70,7 +71,7 @@ test('does not retry non-streaming when a 400 is not stream-related', async () =
     };
 
     await assert.rejects(
-        createChatCompletionWithFallback(client, {
+        requestChatCompletion(client, {
             model: 'test-model',
             messages: [{ role: 'user', content: 'hello' }],
             stream: true

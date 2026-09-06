@@ -131,28 +131,35 @@ test('all command files export slash-command data and an execute function', () =
     }
 });
 
-test('event files are either Discord event handlers or known helper modules', () => {
+// index.js registers a file in events/ only when it exports BOTH `name` and
+// `execute`, and warns when it exports exactly one. So the rule worth
+// asserting is structural — both or neither — rather than a hand-maintained
+// list of which filenames are allowed to be helpers, which had to be edited
+// every time a module moved and said nothing about correctness.
+test('every module in events/ exports both a handler name and execute, or neither', () => {
     const eventFiles = getFiles(path.join(repoRoot, 'events'), file => file.endsWith('.js'));
-    const helperFiles = new Set([
-        'autoresponce.js',
-        'autoResponseState.js',
-        'channelSettings.js',
-    ]);
+    assert.ok(eventFiles.length > 0, 'expected some event modules');
 
+    let handlers = 0;
     for (const file of eventFiles) {
         delete require.cache[file];
         const eventModule = require(file);
         const basename = path.basename(file);
 
-        if (helperFiles.has(basename)) {
-            assert.equal(Boolean(eventModule.name && eventModule.execute), false, `${basename} should remain a helper module`);
-            continue;
-        }
+        const hasName = Boolean(eventModule.name);
+        const hasExecute = typeof eventModule.execute === 'function';
 
-        assert.equal(typeof eventModule.name, 'string', `${basename} should export an event name`);
-        assert.notEqual(eventModule.name.trim(), '', `${basename} should not have a blank event name`);
-        assert.equal(typeof eventModule.execute, 'function', `${basename} should export execute`);
+        assert.equal(hasName, hasExecute,
+            `${basename} exports ${hasName ? 'name without execute' : 'execute without name'} — index.js would skip it with a warning`);
+
+        if (hasName) {
+            handlers += 1;
+            assert.equal(typeof eventModule.name, 'string', `${basename} should export a string event name`);
+            assert.notEqual(eventModule.name.trim(), '', `${basename} should not have a blank event name`);
+        }
     }
+
+    assert.ok(handlers > 0, 'expected at least one real event handler in events/');
 });
 
 test('configuration exposes the values required by the bot runtime', () => {

@@ -63,7 +63,7 @@ require.cache[require.resolve('discord.js')] = {
 const messageStore = require('../events/messageStore');
 const mention = require('../events/mention');
 const channelsCommand = require('../commands/utilities/channels');
-const { isChannelAllowed } = require('../events/channelSettings');
+const { isChannelAllowed } = require('../utils/channelSettings');
 
 function streamingOpenAI() {
     return {
@@ -73,7 +73,7 @@ function streamingOpenAI() {
     };
 }
 
-function createMessage({ content = 'hello', channelId = 'ch-1', allowedChannels = new Map(), mentionsBot = false, openWebUI = null }) {
+function createMessage({ content = 'hello', channelId = 'ch-1', allowedChannels = new Map(), mentionsBot = false, llm = null }) {
     const memory = new Map();
     const messageCounts = new Map();
     const botUser = { id: 'bot-123', username: 'limmybot' };
@@ -86,7 +86,7 @@ function createMessage({ content = 'hello', channelId = 'ch-1', allowedChannels 
             content,
             channel: { id: channelId, sendTyping: async () => {} },
             attachments: new Map(),
-            client: { memory, messageCounts, cooldowns: new Map(), allowedChannels, openWebUI, user: botUser },
+            client: { memory, messageCounts, cooldowns: new Map(), allowedChannels, llm, user: botUser },
             mentions: { has: () => mentionsBot, roles: new Map() },
             reply: async (c) => {
                 replyCalls.push(c);
@@ -121,7 +121,7 @@ test('a direct @mention still replies even in a channel that is NOT allowlisted'
         channelId: 'ch-1',
         allowedChannels: new Map(), // empty: channel not allowed
         mentionsBot: true,
-        openWebUI: streamingOpenAI(),
+        llm: streamingOpenAI(),
     });
     await mention.execute(message);
     assert.ok(replyCalls.length > 0, 'mention should have replied despite the channel not being allowlisted');
@@ -146,7 +146,13 @@ function createInteraction({ subcommand, channelOption = null, channelId = 'ch-1
                 getSubcommand: () => subcommand,
                 getChannel: () => channelOption,
             },
+            // /channels add defers, backfills the channel's history, then
+            // edits its reply — so the mock has to accept all three. Both
+            // reply() and editReply() land in `replies` so assertions can stay
+            // indifferent to which path a subcommand took.
             reply: async (payload) => { replies.push(payload); },
+            deferReply: async () => { },
+            editReply: async (payload) => { replies.push(payload); },
         },
     };
 }

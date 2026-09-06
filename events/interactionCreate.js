@@ -1,5 +1,5 @@
 const { Events, MessageFlags, Collection } = require('discord.js');
-const parseimgs = require('../utils/parseimgs');
+const { safeError } = require('../utils/log');
 const { recordEvent } = require('../utils/stats');
 
 module.exports = {
@@ -10,7 +10,7 @@ module.exports = {
 		const command = interaction.client.commands.get(interaction.commandName);
 
 		if (!command) {
-			parseimgs.safeError(`No command matching ${interaction.commandName} was found.`);
+			safeError(`No command matching ${interaction.commandName} was found.`);
 			return;
 		}
 
@@ -49,7 +49,7 @@ module.exports = {
 				userId: interaction.user.id,
 			});
 		} catch (error) {
-			parseimgs.safeError(error);
+			safeError(error);
 			const replyOptions = { content: 'There was an error while executing this command!', flags: MessageFlags.Ephemeral };
 			if (interaction.replied || interaction.deferred) {
 				await interaction.followUp(replyOptions);

@@ -1,0 +1,65 @@
+# systemd unit for running limmygrok directly under Bun, without Docker.
+# The Docker path in docs/DEPLOY-ORACLE.md is the recommended one; this exists
+# for hosts where installing Docker is not worth it.
+#
+#   sudo cp deploy/limmygrok.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now limmygrok
+#   journalctl -u limmygrok -f
+#
+# Assumes: the repo is at /home/ubuntu/limmygrok, `bun install` has been run
+# there, .env sits alongside it, and bun is at ~/.bun/bin/bun (where the
+# official installer puts it). Adjust User/paths if your layout differs.
+
+[Unit]
+Description=limmygrok Discord bot
+Documentation=https://github.com/paulliy/limmygrok
+# Discord needs DNS and outbound TLS; starting before the network is up just
+# produces a failed login and a restart loop.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/limmygrok
+
+# Secrets come from the environment (utils/config.js reads it first).
+EnvironmentFile=/home/ubuntu/limmygrok/.env
+# Keep the SQLite database out of the working tree so `git pull` never touches
+# it. Create it once: mkdir -p /home/ubuntu/limmygrok-data
+Environment=DATA_DIR=/home/ubuntu/limmygrok-data
+
+# Register slash commands before starting, mirroring docker-entrypoint.sh. A
+# transient Discord API error here is logged, not fatal.
+ExecStartPre=/home/ubuntu/.bun/bin/bun deploy-commands.js
+ExecStart=/home/ubuntu/.bun/bin/bun index.js
+
+# index.js handles SIGTERM: it destroys the gateway connection and
+# WAL-checkpoints SQLite before exiting, so a normal stop is clean.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+Restart=always
+RestartSec=5
+# Do not give up on a bot that has been crash-looping — a provider outage can
+# easily outlast the default burst limit.
+StartLimitIntervalSec=0
+
+# Hardening. The bot only ever needs to read its own directory and write the
+# database, so everything else is closed off.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/limmygrok-data
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=limmygrok
+
+[Install]
+WantedBy=multi-user.target

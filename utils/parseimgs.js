@@ -1,15 +1,14 @@
 'use strict';
 
-const dns = require('dns').promises;
-let config = {};
-try {
-    config = require('../config.json');
-} catch (e) {
-    // Ignore if not present
-}
+// Discord message -> OpenAI chat-payload conversion, plus the image pipeline.
+//
+// Scope is deliberately narrow: this module turns Discord messages into the
+// OpenAI `messages` shape and inlines images. Logging lives in utils/log.js,
+// the request wrapper in utils/llm.js, and the persona in utils/prompt.js —
+// import those directly rather than through here.
 
-const DEFAULT_SYSTEM_PROMPT = 'You are a helpful assistant in a Discord chat.';
-const SYSTEM_PROMPT = config.SYSTEM_PROMPT || DEFAULT_SYSTEM_PROMPT;
+const dns = require('dns').promises;
+const { safeError } = require('./log');
 
 const URL_REGEX = /https?:\/\/[^\s]+/gi;
 const IMAGE_MIME_TYPES_BY_EXTENSION = {
@@ -113,6 +112,40 @@ async function isSafeUrl(url) {
         // If lookup fails or URL is invalid, treat as unsafe
         return false;
     }
+}
+
+const DISCORD_CDN_HOSTS = ['cdn.discordapp.com', 'media.discordapp.net'];
+
+// Discord CDN links are signed and time-limited: `ex` is the expiry as a hex
+// unix timestamp, and once it passes the URL 404s for everyone, us and the
+// model provider alike.
+//
+// This matters because conversation memory holds image turns for up to
+// MEMORY_LIMIT messages. Without this check an image posted hours ago keeps
+// being sent on every later reply in that channel — routing the request to
+// the (pricier) vision model via pickModel, and handing it a URL that
+// resolves to nothing. Detecting it from the URL avoids the doomed fetch too.
+//
+// Anything we cannot read an expiry from is treated as live: an unsigned or
+// unparseable URL might still work, and dropping a valid image is worse than
+// attempting one that fails.
+function isExpiredDiscordUrl(url, now = Date.now()) {
+    let parsed;
+    try {
+        parsed = new URL(url);
+    } catch (e) {
+        return false;
+    }
+
+    if (!DISCORD_CDN_HOSTS.includes(parsed.hostname.toLowerCase())) return false;
+
+    const expiry = parsed.searchParams.get('ex');
+    if (!expiry) return false;
+
+    const expiresAtSeconds = Number.parseInt(expiry, 16);
+    if (!Number.isFinite(expiresAtSeconds)) return false;
+
+    return expiresAtSeconds * 1000 < now;
 }
 
 async function downloadImageAsBase64(url) {
@@ -241,6 +274,11 @@ async function resolveImageUrlsToBase64(messages) {
             const newContent = [];
             for (const part of newMsg.content) {
                 if (part && part.type === 'image_url' && part.image_url && part.image_url.url) {
+                    // A link whose signature has already lapsed is dead for
+                    // everyone; carrying it forward only pays vision-model
+                    // rates to show the model nothing.
+                    if (isExpiredDiscordUrl(part.image_url.url)) continue;
+
                     const resolvedUrl = await downloadImageAsBase64(part.image_url.url);
                     newContent.push({
                         type: 'image_url',
@@ -252,6 +290,10 @@ async function resolveImageUrlsToBase64(messages) {
                     newContent.push(part);
                 }
             }
+            // An image-only turn whose image has expired has nothing left to
+            // say. Sending an empty content array is an API error, so the turn
+            // is dropped — the same way parseimgs already drops empty ones.
+            if (newContent.length === 0) continue;
             newMsg.content = newContent;
         }
         resolvedMessages.push(newMsg);
@@ -400,107 +442,12 @@ function parseimgs(messages) {
     return merged;
 }
 
-function scrubString(str) {
-    if (typeof str !== 'string') return str;
-    let result = str;
-    const discordToken = config.token;
-    const apiKey = config.APIkey;
-    if (discordToken && typeof discordToken === 'string' && discordToken.trim() !== '') {
-        result = result.split(discordToken).join('[REDACTED_DISCORD_TOKEN]');
-    }
-    if (apiKey && typeof apiKey === 'string' && apiKey.trim() !== '') {
-        result = result.split(apiKey).join('[REDACTED_API_KEY]');
-    }
-    return result;
-}
-
-function scrubValue(val, seen = new WeakSet()) {
-    if (typeof val === 'string') {
-        return scrubString(val);
-    }
-    if (val && typeof val === 'object') {
-        if (seen.has(val)) {
-            return val;
-        }
-        seen.add(val);
-
-        if (val instanceof Error) {
-            const scrubbedErr = new Error(scrubString(val.message));
-            scrubbedErr.name = val.name;
-            if (val.stack) {
-                scrubbedErr.stack = scrubString(val.stack);
-            }
-            for (const key of Object.keys(val)) {
-                scrubbedErr[key] = scrubValue(val[key], seen);
-            }
-            return scrubbedErr;
-        }
-
-        if (Array.isArray(val)) {
-            return val.map(item => scrubValue(item, seen));
-        }
-
-        const scrubbedObj = {};
-        for (const key of Object.keys(val)) {
-            scrubbedObj[key] = scrubValue(val[key], seen);
-        }
-        return scrubbedObj;
-    }
-    return val;
-}
-
-function safeLog(...args) {
-    const scrubbedArgs = args.map(arg => scrubValue(arg));
-    console.log(...scrubbedArgs);
-}
-
-function safeError(...args) {
-    const scrubbedArgs = args.map(arg => scrubValue(arg));
-    console.error(...scrubbedArgs);
-}
-
-async function createChatCompletionWithFallback(openWebUI, payload, requestOptions) {
-    if (!openWebUI?.chat?.completions?.create) {
-        throw new Error('OpenWebUI client is not configured.');
-    }
-
-    try {
-        const stream = await openWebUI.chat.completions.create({ ...payload, stream: true }, requestOptions);
-        return { isStream: true, stream, content: '' };
-    } catch (error) {
-        const statusCode = error?.status || error?.statusCode || error?.response?.status;
-        const message = typeof error?.message === 'string' ? error.message : '';
-        const isStreamingProblem = /stream|no body|unsupported/i.test(message);
-        const shouldFallback = payload?.stream !== false && (
-            statusCode === 404 ||
-            statusCode === 405 ||
-            isStreamingProblem
-        );
-
-        if (!shouldFallback) {
-            throw error;
-        }
-
-        safeLog('\n[DEBUG] Streaming chat request failed, retrying without streaming.', error);
-        const fallbackPayload = { ...payload, stream: false };
-        const response = await openWebUI.chat.completions.create(fallbackPayload, requestOptions);
-        return {
-            isStream: false,
-            response,
-            content: response?.choices?.[0]?.message?.content || ''
-        };
-    }
-}
-
 module.exports = {
     isImageUrl,
+    isExpiredDiscordUrl,
     parseTextAndImages,
     formatContent,
     parseDiscordMessage,
     parseimgs,
     resolveImageUrlsToBase64,
-    safeLog,
-    safeError,
-    createChatCompletionWithFallback,
-    SYSTEM_PROMPT
 };

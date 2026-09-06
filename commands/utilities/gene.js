@@ -1,7 +1,12 @@
 const { SlashCommandBuilder } = require('discord.js');
-const {MODEL_NAME} = require('../../config.json');
-const { safeError, createChatCompletionWithFallback } = require('../../utils/parseimgs');
+const { resolveConfig } = require('../../utils/config');
+const { safeError } = require('../../utils/log');
+const { requestChatCompletion, describeLlmError } = require('../../utils/llm');
+const { buildReplyContext } = require('../../utils/prompt');
+const { applyServerVoice, samplingParamsFor } = require('../../utils/voice');
 const { createStreamAnimator, stripThinkAndCitations, truncateForDiscord } = require('../../utils/streamingReply');
+
+const fallbackConfig = resolveConfig() || {};
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -14,19 +19,32 @@ module.exports = {
     async execute(interaction) {
         await interaction.deferReply();
         const userInput = interaction.options.getString('input');
-        const openWebUI = interaction.client.openWebUI;
+        const client = interaction.client;
+        const llm = client.llm;
+        const llmConfig = client.config || fallbackConfig;
         let animator;
 
         try {
-            const completion = await createChatCompletionWithFallback(openWebUI, {
-                model: MODEL_NAME,
+            // Same learned dialect the chat paths use, so /generatestring
+            // sounds like the server too.
+            const { systemPrompt, profile } = buildReplyContext({
+                db: client.db,
+                guildId: interaction.guildId,
+                queryText: userInput,
+            });
+
+            const completion = await requestChatCompletion(llm, {
+                // /generatestring takes text only, so never the vision model.
+                model: llmConfig.MODEL_NAME,
                 messages: [
+                    { role: 'system', content: systemPrompt },
                     { role: 'user', content: userInput }
                 ],
                 stream: true,
-                // Removed non-standard 'features' object to prevent OpenWebUI from dropping the request
+                ...samplingParamsFor(profile),
             }, {
-                timeout: 120_000,
+                requestOptions: { timeout: 120_000 },
+                config: llmConfig,
             });
 
             // Decoupled editing interval prevents Discord rate limits from blocking the stream
@@ -47,7 +65,11 @@ module.exports = {
                 animator.append(completion.response?.choices?.[0]?.message?.content || '');
             }
 
-            const finalContent = stripThinkAndCitations(animator.content);
+            const finalContent = applyServerVoice(
+                stripThinkAndCitations(animator.content),
+                profile,
+                { botName: client.user?.username }
+            );
             animator.finish();
 
             if (!finalContent) {
@@ -61,8 +83,8 @@ module.exports = {
             if (animator) {
                 animator.finish();
             }
-            safeError('OpenWebUI Error:', error);
-            await interaction.editReply(`Error: ${error.message ?? 'Something went wrong.'}`).catch(() => {});
+            safeError('[GENE] LLM error:', error);
+            await interaction.editReply(describeLlmError(error, llmConfig)).catch(() => {});
         } finally {
             if (animator) {
                 animator.finish();

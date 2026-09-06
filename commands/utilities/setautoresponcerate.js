@@ -1,5 +1,5 @@
 const { SlashCommandBuilder, MessageFlags, PermissionFlagsBits } = require('discord.js');
-const { setAutoResponseRate, getAutoResponseRate } = require('../../events/autoResponseState');
+const { setAutoResponseRate, getAutoResponseRate } = require('../../utils/autoResponseState');
 
 module.exports = {
     data: new SlashCommandBuilder()

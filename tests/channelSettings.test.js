@@ -6,7 +6,7 @@ const {
     disallowChannel,
     listAllowedChannels,
     clearAllowedChannels,
-} = require('../events/channelSettings');
+} = require('../utils/channelSettings');
 
 test('channels are not allowed by default (opt-in)', () => {
     const client = {};

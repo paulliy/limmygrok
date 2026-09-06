@@ -1,5 +1,5 @@
 const {Events} = require('discord.js');
-const { safeLog } = require('../utils/parseimgs');
+const { safeLog } = require('../utils/log');
 
 module.exports = {
 	name: Events.ClientReady,
